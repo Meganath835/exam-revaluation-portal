@@ -1,0 +1,7 @@
+{
+  "executionPlatform": "Camunda Cloud", "executionPlatformVersion": "8.9.0", "exporter": {"name": "Camunda Modeler", "version": "5.46.1"}, "schemaVersion": 18, "type": "default", "id": "submit-request",
+  "components": [
+    { "type": "text", "id": "Text_Header", "text": "=\"### Revaluation request \" + requestId + \"\n\" + examSession + \": \" + string join(for s in subjects return s.subjectCode + \" (\" + string(s.originalMarks) + \"/\" + string(s.maxMarks) + \")\", \", \")" },
+    { "type": "checkbox", "id": "Field_ApplicationComplete", "key": "declarationAccepted", "label": "I confirm these marks match my published marks card", "validate": { "required": true } }
+  ]
+}

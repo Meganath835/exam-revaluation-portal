@@ -1,0 +1,8 @@
+{
+  "executionPlatform": "Camunda Cloud", "executionPlatformVersion": "8.9.0", "exporter": {"name": "Camunda Modeler", "version": "5.46.1"}, "schemaVersion": 18, "type": "default", "id": "verify-application",
+  "components": [
+    { "type": "text", "id": "Text_Header", "text": "=\"### Verify application \" + requestId + \"\n\" + studentName + \" (\" + studentId + \") · \" + examSession + \": \" + string join(for s in subjects return s.subjectCode + \" \" + string(s.originalMarks) + \"/\" + string(s.maxMarks), \", \")" },
+    { "type": "checkbox", "id": "Field_ApplicationComplete", "key": "applicationComplete", "label": "The application is complete and correct (accept it)" },
+    { "type": "textarea", "id": "Field_VerificationRemarks", "key": "verificationRemarks", "label": "Remarks", "description": "Required when you reject; the student sees them" }
+  ]
+}

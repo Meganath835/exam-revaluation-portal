@@ -1,0 +1,60 @@
+# All values can be overridden with environment variables (see .env.example in the repo root).
+server:
+  port: 8080
+
+spring:
+  application:
+    name: revaluation-backend
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/revaluation}
+    username: ${DB_USER:revaluation}
+    password: ${DB_PASSWORD:}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+
+camunda:
+  client:
+    # self-managed (local Camunda, docker compose profile "camunda") or saas (Camunda 8 SaaS cluster)
+    mode: ${CAMUNDA_MODE:self-managed}
+    grpc-address: ${CAMUNDA_GRPC_ADDRESS:http://localhost:26500}
+    rest-address: ${CAMUNDA_REST_ADDRESS:http://localhost:8088}
+    auth:
+      # none for local Camunda without login; oidc for SaaS (client id/secret from the Console)
+      method: ${CAMUNDA_AUTH_METHOD:none}
+      client-id: ${CAMUNDA_CLIENT_ID:}
+      client-secret: ${CAMUNDA_CLIENT_SECRET:}
+    cloud:
+      cluster-id: ${CAMUNDA_CLUSTER_ID:}
+      region: ${CAMUNDA_REGION:}
+    worker:
+      defaults:
+        max-jobs-active: 16
+
+app:
+  fee-per-subject-paise: ${FEE_PER_SUBJECT_PAISE:50000}
+  # ISO-8601 durations. Use short values for a demo, e.g. PAYMENT_WINDOW=PT2M.
+  # examiner-sla sets the due date shown on the two examiner tasks.
+  revaluation-window: ${REVALUATION_WINDOW:P15D}
+  payment-window: ${PAYMENT_WINDOW:PT15M}
+  examiner-sla: ${EXAMINER_SLA:P3D}
+  cors-origins: ${CORS_ORIGINS:http://localhost:5173,http://localhost:3000}
+  razorpay:
+    key-id: ${RAZORPAY_KEY_ID:rzp_test_mock}
+    key-secret: ${RAZORPAY_KEY_SECRET:mock_secret_change_me}
+    # The URL the REST connector calls. Real: https://api.razorpay.com. Mock: http://backend:8080/mock/razorpay
+    connector-base-url: ${RAZORPAY_CONNECTOR_BASE_URL:https://api.razorpay.com}
+    mock: ${RAZORPAY_MOCK:false}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    edu.revaluation: INFO

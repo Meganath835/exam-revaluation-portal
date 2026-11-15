@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="https://www.omg.org/spec/DMN/20191111/MODEL/" xmlns:dmndi="https://www.omg.org/spec/DMN/20191111/DMNDI/" xmlns:dc="http://www.omg.org/spec/DMN/20180521/DC/" xmlns:modeler="http://camunda.org/schema/modeler/1.0" id="Definitions_Eligibility" name="Evaluate Eligibility" namespace="http://camunda.org/schema/1.0/dmn" exporter="Camunda Modeler" exporterVersion="5.46.1" modeler:executionPlatform="Camunda Cloud" modeler:executionPlatformVersion="8.9.0">
+  <decision id="eligibilityDecision" name="Evaluate Eligibility">
+    <decisionTable id="DecisionTable_Eligibility" hitPolicy="FIRST">
+      <input id="Input_WithinWindow" label="Within revaluation window">
+        <inputExpression id="InputExpression_WithinWindow" typeRef="boolean">
+          <text>withinWindow</text>
+        </inputExpression>
+      </input>
+      <input id="Input_ApplicationComplete" label="Application complete">
+        <inputExpression id="InputExpression_ApplicationComplete" typeRef="boolean">
+          <text>applicationComplete</text>
+        </inputExpression>
+      </input>
+      <output id="Output_Eligible" label="Eligible" name="eligible" typeRef="boolean" />
+      <output id="Output_Reason" label="Reason" name="reason" typeRef="string" />
+      <rule id="Rule_Eligible">
+        <description>Both checks pass</description>
+        <inputEntry id="UnaryTests_R1_1"><text>true</text></inputEntry>
+        <inputEntry id="UnaryTests_R1_2"><text>true</text></inputEntry>
+        <outputEntry id="Output_R1_1"><text>true</text></outputEntry>
+        <outputEntry id="Output_R1_2"><text>"Eligible"</text></outputEntry>
+      </rule>
+      <rule id="Rule_WindowClosed">
+        <description>Requested more than the allowed days after results</description>
+        <inputEntry id="UnaryTests_R2_1"><text>false</text></inputEntry>
+        <inputEntry id="UnaryTests_R2_2"><text>-</text></inputEntry>
+        <outputEntry id="Output_R2_1"><text>false</text></outputEntry>
+        <outputEntry id="Output_R2_2"><text>"The revaluation window for this exam session has closed."</text></outputEntry>
+      </rule>
+      <rule id="Rule_Incomplete">
+        <description>Exam cell marked the application incomplete</description>
+        <inputEntry id="UnaryTests_R3_1"><text>-</text></inputEntry>
+        <inputEntry id="UnaryTests_R3_2"><text>false</text></inputEntry>
+        <outputEntry id="Output_R3_1"><text>false</text></outputEntry>
+        <outputEntry id="Output_R3_2"><text>"The exam cell did not accept the application."</text></outputEntry>
+      </rule>
+      <rule id="Rule_Fallback">
+        <description>Missing data: never approve by default</description>
+        <inputEntry id="UnaryTests_R4_1"><text>-</text></inputEntry>
+        <inputEntry id="UnaryTests_R4_2"><text>-</text></inputEntry>
+        <outputEntry id="Output_R4_1"><text>false</text></outputEntry>
+        <outputEntry id="Output_R4_2"><text>"Eligibility could not be determined."</text></outputEntry>
+      </rule>
+    </decisionTable>
+  </decision>
+  <dmndi:DMNDI>
+    <dmndi:DMNDiagram>
+      <dmndi:DMNShape id="DMNShape_Eligibility" dmnElementRef="eligibilityDecision">
+        <dc:Bounds height="80" width="180" x="160" y="100" />
+      </dmndi:DMNShape>
+    </dmndi:DMNDiagram>
+  </dmndi:DMNDI>
+</definitions>

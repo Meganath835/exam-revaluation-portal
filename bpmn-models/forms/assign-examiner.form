@@ -1,0 +1,8 @@
+{
+  "executionPlatform": "Camunda Cloud", "executionPlatformVersion": "8.9.0", "exporter": {"name": "Camunda Modeler", "version": "5.46.1"}, "schemaVersion": 18, "type": "default", "id": "assign-examiner",
+  "components": [
+    { "type": "text", "id": "Text_Header", "text": "=\"### Assign an independent examiner\n\" + subject.subjectCode + \" \" + subject.subjectName + \" (\" + subject.department + \")\"" },
+    { "type": "textfield", "id": "Field_FirstExaminerId", "key": "firstExaminerId", "label": "Examiner username", "description": "Same department, not the first evaluator", "validate": { "required": true } },
+    { "type": "textfield", "id": "Field_ScriptId", "key": "scriptId", "label": "Answer script ID", "validate": { "required": true } }
+  ]
+}

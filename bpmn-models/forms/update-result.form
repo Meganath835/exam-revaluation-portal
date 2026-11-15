@@ -1,0 +1,8 @@
+{
+  "executionPlatform": "Camunda Cloud", "executionPlatformVersion": "8.9.0", "exporter": {"name": "Camunda Modeler", "version": "5.46.1"}, "schemaVersion": 18, "type": "default", "id": "update-result",
+  "components": [
+    { "type": "text", "id": "Text_Header", "text": "=\"### Update the official result for \" + requestId + \"\n\" + string join(for r in subjectResults return r.subjectCode + \": \" + string(r.originalMarks) + \" -> \" + string(r.revisedMarks) + \" (\" + r.outcome + \")\", \", \")" },
+    { "type": "checkbox", "id": "Field_ResultUpdated", "key": "resultUpdated", "label": "The revised marks are entered in the university result system", "validate": { "required": true } },
+    { "type": "textfield", "id": "Field_ResultReference", "key": "resultReference", "label": "Result system reference" }
+  ]
+}

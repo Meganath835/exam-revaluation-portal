@@ -1,0 +1,11 @@
+# secrets
+.env
+# build output
+backend-springboot/target/
+frontend-react/node_modules/
+frontend-react/dist/
+# editors / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store

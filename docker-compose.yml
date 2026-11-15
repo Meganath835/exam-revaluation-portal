@@ -1,0 +1,119 @@
+# Revaluation Portal: PostgreSQL + Spring Boot backend + React frontend.
+#
+#   Everything local, including Camunda (recommended for the demo):
+#     docker compose --profile camunda up --build
+#
+#   Using a Camunda 8 SaaS cluster instead (set CAMUNDA_MODE=saas and the cluster values in .env):
+#     docker compose up --build
+#
+# All settings and secrets come from .env (copy .env.example). Nothing secret is written here.
+
+name: revaluation
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: revaluation
+      POSTGRES_USER: ${DB_USER:-revaluation}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-revaluation} -d revaluation"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend-springboot/Dockerfile
+    env_file: .env
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/revaluation
+      CAMUNDA_GRPC_ADDRESS: ${CAMUNDA_GRPC_ADDRESS:-http://camunda:26500}
+      CAMUNDA_REST_ADDRESS: ${CAMUNDA_REST_ADDRESS:-http://camunda:8080}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend-react
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Profile "camunda": a local Camunda 8.9 (Zeebe, Operate, Tasklist, REST API),
+  # the connectors runtime (REST and Email connectors) and Mailpit to catch emails.
+  # ---------------------------------------------------------------------------
+  camunda:
+    profiles: ["camunda"]
+    image: camunda/camunda:8.9.28
+    environment:
+      # H2 as secondary storage keeps the demo light (no Elasticsearch needed).
+      CAMUNDA_DATA_SECONDARYSTORAGE_TYPE: rdbms
+      CAMUNDA_DATA_SECONDARYSTORAGE_RDBMS_URL: jdbc:h2:file:/usr/local/camunda/data/h2/camunda;MODE=PostgreSQL
+      CAMUNDA_DATA_SECONDARYSTORAGE_RDBMS_USERNAME: sa
+      CAMUNDA_DATA_SECONDARYSTORAGE_RDBMS_PASSWORD: ""
+      # Demo security: API open inside the Docker network, one login for Operate/Tasklist.
+      CAMUNDA_SECURITY_AUTHENTICATION_UNPROTECTEDAPI: "true"
+      CAMUNDA_SECURITY_AUTHORIZATIONS_ENABLED: "false"
+      CAMUNDA_SECURITY_INITIALIZATION_USERS_0_USERNAME: ${CAMUNDA_UI_USER:-demo}
+      CAMUNDA_SECURITY_INITIALIZATION_USERS_0_PASSWORD: ${CAMUNDA_UI_PASSWORD:-demo}
+      CAMUNDA_SECURITY_INITIALIZATION_USERS_0_NAME: Demo User
+      CAMUNDA_SECURITY_INITIALIZATION_USERS_0_EMAIL: demo@example.edu
+      CAMUNDA_SECURITY_INITIALIZATION_DEFAULTROLES_ADMIN_USERS_0: ${CAMUNDA_UI_USER:-demo}
+    volumes:
+      - camunda-data:/usr/local/camunda/data
+    ports:
+      - "8088:8080"   # Operate: http://localhost:8088/operate  Tasklist: /tasklist
+      - "26500:26500"
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/9600' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+
+  connectors:
+    profiles: ["camunda"]
+    image: camunda/connectors-bundle:8.9.0
+    environment:
+      CAMUNDA_CLIENT_MODE: self-managed
+      CAMUNDA_CLIENT_GRPC_ADDRESS: http://camunda:26500
+      CAMUNDA_CLIENT_REST_ADDRESS: http://camunda:8080
+      # Connector secrets: self-managed connectors only read env vars with the SECRET_ prefix.
+      # {{secrets.RAZORPAY_KEY_ID}} in the BPMN resolves to SECRET_RAZORPAY_KEY_ID here.
+      SECRET_RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID}
+      SECRET_RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET}
+      SECRET_SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SECRET_SMTP_PORT: ${SMTP_PORT:-1025}
+      SECRET_SMTP_SECURITY: ${SMTP_SECURITY:-NONE}
+      SECRET_SMTP_USERNAME: ${SMTP_USERNAME:-demo}
+      SECRET_SMTP_PASSWORD: ${SMTP_PASSWORD:-demo}
+      SECRET_SMTP_FROM: ${SMTP_FROM:-revaluation@example.edu}
+    depends_on:
+      camunda:
+        condition: service_healthy
+    restart: unless-stopped
+
+  mailpit:
+    profiles: ["camunda"]
+    image: axllent/mailpit:v1.27
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+    ports:
+      - "8025:8025"   # inbox: http://localhost:8025
+
+volumes:
+  pgdata:
+  camunda-data:

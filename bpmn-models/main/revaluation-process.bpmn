@@ -1,0 +1,666 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" xmlns:modeler="http://camunda.org/schema/modeler/1.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" id="Definitions_Revaluation" targetNamespace="http://example.com/revaluation" exporter="Camunda Modeler" exporterVersion="5.46.1" modeler:executionPlatform="Camunda Cloud" modeler:executionPlatformVersion="8.9.0">
+  <bpmn:collaboration id="Collaboration_Revaluation">
+    <bpmn:participant id="Participant_Revaluation" name="Examination Revaluation Request" processRef="revaluationProcess" />
+  </bpmn:collaboration>
+  <bpmn:process id="revaluationProcess" name="Examination Revaluation Request" isExecutable="true">
+    <bpmn:documentation>Main process. Started by the Spring Boot backend (POST /api/requests) with the start payload described in the README. Each examination task runs once per subject (parallel multi-instance).</bpmn:documentation>
+    <bpmn:laneSet id="LaneSet_Revaluation">
+      <bpmn:lane id="Lane_RequestEligibility" name="Request and Eligibility">
+        <bpmn:flowNodeRef>requestStarted</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>submitRevaluationRequest</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>verifyApplication</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>evaluateEligibility</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>eligibleGateway</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>notifyRejected</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>requestRejected</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="Lane_PaymentProcessing" name="Payment Processing">
+        <bpmn:flowNodeRef>createRazorpayOrder</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>completeCheckoutAndVerifyPayment</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>paymentWindowExpired</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>paymentGateway</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>notifyPaymentFailed</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>closedPaymentFailed</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="Lane_ExaminationRevaluation" name="Examination and Revaluation">
+        <bpmn:flowNodeRef>clerkAssignExaminer</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>examinerSendsMarks</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>clerkAssignSecondExaminer</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>reEvaluateScript</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>evaluateMarksDifference</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>marksIncreasedGateway</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="Lane_ModerationApproval" name="Moderation and Approval">
+        <bpmn:flowNodeRef>hodReviewIncrease</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>coeApproveResult</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>increaseApprovedGateway</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="Lane_ResultPublication" name="Result Publication">
+        <bpmn:flowNodeRef>updateOfficialResult</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>notifyResultPublished</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>requestCompleted</bpmn:flowNodeRef>
+      </bpmn:lane>
+    </bpmn:laneSet>
+
+    <!-- ===================== Request and Eligibility ===================== -->
+
+    <bpmn:startEvent id="requestStarted" name="Request started">
+      <bpmn:outgoing>flowToSubmit</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:userTask id="submitRevaluationRequest" name="Submit revaluation request">
+      <bpmn:documentation>The student's request form. The backend completes this task right after the student submits the form in the portal (declarationAccepted = true once the backend has validated the subjects and marks). If that does not happen, the task stays in the student's task inbox.</bpmn:documentation>
+      <bpmn:extensionElements>
+        <zeebe:userTask />
+        <zeebe:formDefinition formId="submit-request" />
+        <zeebe:assignmentDefinition assignee="=studentId" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>flowToSubmit</bpmn:incoming>
+      <bpmn:outgoing>flowToVerify</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:userTask id="verifyApplication" name="Exam cell verifies application">
+      <bpmn:documentation>The exam cell checks the student's application (subjects, marks against the marks card, documents) and accepts or rejects it: applicationComplete, verificationRemarks. A rejection is explained to the student through the eligibility decision.</bpmn:documentation>
+      <bpmn:extensionElements>
+        <zeebe:userTask />
+        <zeebe:formDefinition formId="verify-application" />
+        <zeebe:assignmentDefinition candidateGroups="exam-cell" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>flowToVerify</bpmn:incoming>
+      <bpmn:outgoing>flowToEligibility</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:businessRuleTask id="evaluateEligibility" name="Evaluate Eligibility">
+      <bpmn:extensionElements>
+        <zeebe:calledDecision decisionId="eligibilityDecision" resultVariable="eligibility" />
+        <zeebe:ioMapping>
+          <zeebe:input source="=today() &lt;= date(resultPublishedOn) + duration(config.revaluationWindow)" target="withinWindow" />
+          <zeebe:input source="=applicationComplete = true" target="applicationComplete" />
+          <zeebe:output source="=eligibility" target="eligibility" />
+          <zeebe:output source="=if eligibility.eligible = false and applicationComplete = false and verificationRemarks != null and verificationRemarks != &#34;&#34; then eligibility.reason + &#34; Remarks: &#34; + verificationRemarks else eligibility.reason" target="rejectionReason" />
+        </zeebe:ioMapping>
+      </bpmn:extensionElements>
+      <bpmn:incoming>flowToEligibility</bpmn:incoming>
+      <bpmn:outgoing>flowToEligibleGateway</bpmn:outgoing>
+    </bpmn:businessRuleTask>
+
+    <bpmn:exclusiveGateway id="eligibleGateway" name="Eligible?" default="flowNotEligible">
+      <bpmn:incoming>flowToEligibleGateway</bpmn:incoming>
+      <bpmn:outgoing>flowEligible</bpmn:outgoing>
+      <bpmn:outgoing>flowNotEligible</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:serviceTask id="notifyRejected" name="Notify: request rejected" zeebe:modelerTemplate="io.camunda.connectors.email.v1" zeebe:modelerTemplateVersion="2">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="io.camunda:email:1" retries="3" />
+        <zeebe:ioMapping>
+          <zeebe:input source="simple" target="authentication.type" />
+          <zeebe:input source="{{secrets.SMTP_USERNAME}}" target="authentication.username" />
+          <zeebe:input source="{{secrets.SMTP_PASSWORD}}" target="authentication.password" />
+          <zeebe:input source="smtp" target="protocol" />
+          <zeebe:input source="{{secrets.SMTP_HOST}}" target="data.smtpConfig.smtpHost" />
+          <zeebe:input source="{{secrets.SMTP_PORT}}" target="data.smtpConfig.smtpPort" />
+          <zeebe:input source="{{secrets.SMTP_SECURITY}}" target="data.smtpConfig.smtpCryptographicProtocol" />
+          <zeebe:input source="sendEmailSmtp" target="data.smtpActionDiscriminator" />
+          <zeebe:input source="{{secrets.SMTP_FROM}}" target="data.smtpAction.from" />
+          <zeebe:input source="=studentEmail" target="data.smtpAction.to" />
+          <zeebe:input source="=&#34;Revaluation request &#34; + requestId + &#34; was not accepted&#34;" target="data.smtpAction.subject" />
+          <zeebe:input source="PLAIN" target="data.smtpAction.contentType" />
+          <zeebe:input source="=&#34;Dear &#34; + studentName + &#34;,\n\nYour revaluation request &#34; + requestId + &#34; was not accepted.\nReason: &#34; + rejectionReason + &#34;\n\nOffice of the Controller of Examinations&#34;" target="data.smtpAction.body" />
+        </zeebe:ioMapping>
+        <zeebe:taskHeaders>
+          <zeebe:header key="retryBackoff" value="PT10S" />
+        </zeebe:taskHeaders>
+      </bpmn:extensionElements>
+      <bpmn:incoming>flowNotEligible</bpmn:incoming>
+      <bpmn:outgoing>flowToRejected</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:endEvent id="requestRejected" name="Closed">
+      <bpmn:incoming>flowToRejected</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ===================== Payment Processing ===================== -->
+
+    <bpmn:serviceTask id="createRazorpayOrder" name="Create Razorpay test order - REST Connector">
+      <bpmn:documentation>REST Outbound Connector. Credentials come from connector secrets RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET; nothing secret is stored in this file.</bpmn:documentation>
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="io.camunda:http-json:1" retries="3" />
+        <zeebe:ioMapping>
+          <zeebe:input source="basic" target="authentication.type" />
+          <zeebe:input source="{{secrets.RAZORPAY_KEY_ID}}" target="authentication.username" />
+          <zeebe:input source="{{secrets.RAZORPAY_KEY_SECRET}}" target="authentication.password" />
+          <zeebe:input source="POST" target="method" />
+          <zeebe:input source="=config.razorpayBaseUrl + &#34;/v1/orders&#34;" target="url" />
+          <zeebe:input source="={&#34;Content-Type&#34;: &#34;application/json&#34;}" target="headers" />
+          <zeebe:input source="={amount: count(subjects) * feePerSubject, currency: &#34;INR&#34;, receipt: requestId, notes: {studentId: studentId, examSession: examSession}}" target="body" />
+          <zeebe:input source="=20" target="connectionTimeoutInSeconds" />
+          <zeebe:input source="=20" target="readTimeoutInSeconds" />
+          <zeebe:input source="=false" target="storeResponse" />
+          <zeebe:input source="=false" target="ignoreNullValues" />
+        </zeebe:ioMapping>
+        <zeebe:taskHeaders>
+          <zeebe:header key="elementTemplateVersion" value="13" />
+          <zeebe:header key="elementTemplateId" value="io.camunda.connectors.HttpJson.v2" />
+          <zeebe:header key="resultExpression" value="={&#10;  razorpayOrderId: response.body.id,&#10;  razorpayAmount: response.body.amount,&#10;  razorpayCurrency: response.body.currency,&#10;  razorpayOrderStatus: response.body.status&#10;}" />
+          <zeebe:header key="retryBackoff" value="PT10S" />
+        </zeebe:taskHeaders>
+      </bpmn:extensionElements>
+      <bpmn:incoming>flowEligible</bpmn:incoming>
+      <bpmn:outgoing>flowToCheckout</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:userTask id="completeCheckoutAndVerifyPayment" name="Complete Checkout and Verify Payment">
+      <bpmn:documentation>The student pays in Razorpay Checkout. The backend (POST /api/payments/{requestId}/confirm) verifies HMAC-SHA256(order_id|payment_id) with the key secret and completes this task with paymentSuccessful.</bpmn:documentation>
+      <bpmn:extensionElements>
+        <zeebe:userTask />
+        <zeebe:assignmentDefinition assignee="=studentId" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>flowToCheckout</bpmn:incoming>
+      <bpmn:outgoing>flowToPaymentGateway</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:boundaryEvent id="paymentWindowExpired" name="Payment window expired" attachedToRef="completeCheckoutAndVerifyPayment">
+      <bpmn:extensionElements>
+        <zeebe:ioMapping>
+          <zeebe:output source="=true" target="paymentExpired" />
+        </zeebe:ioMapping>
+      </bpmn:extensionElements>
+      <bpmn:outgoing>flowExpiredToNotify</bpmn:outgoing>
+      <bpmn:timerEventDefinition>
+        <bpmn:timeDuration xsi:type="bpmn:tFormalExpression">=config.paymentWindow</bpmn:timeDuration>
+      </bpmn:timerEventDefinition>
+    </bpmn:boundaryEvent>
+
+    <bpmn:exclusiveGateway id="paymentGateway" name="Payment successful?" default="flowPaymentFailed">
+      <bpmn:incoming>flowToPaymentGateway</bpmn:incoming>
+      <bpmn:outgoing>flowPaymentSuccessful</bpmn:outgoing>
+      <bpmn:outgoing>flowPaymentFailed</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:serviceTask id="notifyPaymentFailed" name="Notify Payment Failure" zeebe:modelerTemplate="io.camunda.connectors.email.v1" zeebe:modelerTemplateVersion="2">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="io.camunda:email:1" retries="3" />
+        <zeebe:ioMapping>
+          <zeebe:input source="simple" target="authentication.type" />
+          <zeebe:input source="{{secrets.SMTP_USERNAME}}" target="authentication.username" />
+          <zeebe:input source="{{secrets.SMTP_PASSWORD}}" target="authentication.password" />
+          <zeebe:input source="smtp" target="protocol" />
+          <zeebe:input source="{{secrets.SMTP_HOST}}" target="data.smtpConfig.smtpHost" />
+          <zeebe:input source="{{secrets.SMTP_PORT}}" target="data.smtpConfig.smtpPort" />
+          <zeebe:input source="{{secrets.SMTP_SECURITY}}" target="data.smtpConfig.smtpCryptographicProtocol" />
+          <zeebe:input source="sendEmailSmtp" target="data.smtpActionDiscriminator" />
+          <zeebe:input source="{{secrets.SMTP_FROM}}" target="data.smtpAction.from" />
+          <zeebe:input source="=studentEmail" target="data.smtpAction.to" />
+          <zeebe:input source="=if paymentExpired = true then &#34;Revaluation request &#34; + requestId + &#34; closed: fee not paid&#34; else &#34;Payment for revaluation request &#34; + requestId + &#34; failed&#34;" target="data.smtpAction.subject" />
+          <zeebe:input source="PLAIN" target="data.smtpAction.contentType" />
+          <zeebe:input source="=&#34;Dear &#34; + studentName + &#34;,\n\n&#34; + (if paymentExpired = true then &#34;The payment window for request &#34; + requestId + &#34; ended before the fee was paid, so the request was closed. You can submit a new request while the revaluation window is open.&#34; else &#34;We could not verify the payment for request &#34; + requestId + &#34;, so the request was closed. If money left your account it will be returned automatically.&#34;) + &#34;\n\nOffice of the Controller of Examinations&#34;" target="data.smtpAction.body" />
+        </zeebe:ioMapping>
+        <zeebe:taskHeaders>
+          <zeebe:header key="retryBackoff" value="PT10S" />
+        </zeebe:taskHeaders>
+      </bpmn:extensionElements>
+      <bpmn:incoming>flowPaymentFailed</bpmn:incoming>
+      <bpmn:incoming>flowExpiredToNotify</bpmn:incoming>
+      <bpmn:outgoing>flowToClosedPaymentFailed</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:endEvent id="closedPaymentFailed" name="Closed">
+      <bpmn:incoming>flowToClosedPaymentFailed</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ===================== Examination and Revaluation (one instance per subject) ===================== -->
+
+    <bpmn:userTask id="clerkAssignExaminer" name="Clerk assigns independent examiner">
+      <bpmn:documentation>Exam cell picks an examiner from the subject's department who did not do the first evaluation, and confirms the answer script id.</bpmn:documentation>
+      <bpmn:extensionElements>
+        <zeebe:userTask />
+        <zeebe:formDefinition formId="assign-examiner" />
+        <zeebe:assignmentDefinition candidateGroups="exam-cell" />
+        <zeebe:ioMapping>
+          <zeebe:input source="=null" target="firstExaminerId" />
+          <zeebe:input source="=null" target="scriptId" />
+        </zeebe:ioMapping>
+      </bpmn:extensionElements>
+      <bpmn:incoming>flowPaymentSuccessful</bpmn:incoming>
+      <bpmn:outgoing>flowToExaminerMarks</bpmn:outgoing>
+      <bpmn:multiInstanceLoopCharacteristics>
+        <bpmn:extensionElements>
+          <zeebe:loopCharacteristics inputCollection="=subjects" inputElement="subject" outputCollection="firstAssignments" outputElement="=context put(context put(subject, &#34;firstExaminerId&#34;, firstExaminerId), &#34;scriptId&#34;, scriptId)" />
+        </bpmn:extensionElements>
+      </bpmn:multiInstanceLoopCharacteristics>
+    </bpmn:userTask>
+
+    <bpmn:userTask id="examinerSendsMarks" name="Examiner sends updated marks to clerk">
+      <bpmn:documentation>Blind re-evaluation by the first independent examiner. The examiner does not see the student's identity or the original marks.</bpmn:documentation>
+      <bpmn:extensionElements>
+        <zeebe:userTask />
+        <zeebe:formDefinition formId="examiner-marks" />
+        <zeebe:assignmentDefinition assignee="=subject.firstExaminerId" />
+        <zeebe:taskSchedule dueDate="=now() + duration(config.examinerSla)" />
+        <zeebe:ioMapping>
+          <zeebe:input source="=null" target="firstExaminerMarks" />
+          <zeebe:input source="=null" target="firstExaminerRemarks" />
+        </zeebe:ioMapping>
+      </bpmn:extensionElements>
+      <bpmn:incoming>flowToExaminerMarks</bpmn:incoming>
+      <bpmn:outgoing>flowToAssignSecond</bpmn:outgoing>
+      <bpmn:multiInstanceLoopCharacteristics>
+        <bpmn:extensionElements>
+          <zeebe:loopCharacteristics inputCollection="=firstAssignments" inputElement="subject" outputCollection="firstEvaluations" outputElement="=context put(context put(subject, &#34;firstExaminerMarks&#34;, firstExaminerMarks), &#34;firstExaminerRemarks&#34;, firstExaminerRemarks)" />
+        </bpmn:extensionElements>
+      </bpmn:multiInstanceLoopCharacteristics>
+    </bpmn:userTask>
+
+    <bpmn:userTask id="clerkAssignSecondExaminer" name="Clerk assigns second independent examiner">
+      <bpmn:documentation>Exam cell sees the first examiner's marks and picks a second examiner who is neither the first evaluator nor the first revaluation examiner.</bpmn:documentation>
+      <bpmn:extensionElements>
+        <zeebe:userTask />
+        <zeebe:formDefinition formId="assign-second-examiner" />
+        <zeebe:assignmentDefinition candidateGroups="exam-cell" />
+        <zeebe:ioMapping>
+          <zeebe:input source="=null" target="secondExaminerId" />
+        </zeebe:ioMapping>
+      </bpmn:extensionElements>
+      <bpmn:incoming>flowToAssignSecond</bpmn:incoming>
+      <bpmn:outgoing>flowToReEvaluate</bpmn:outgoing>
+      <bpmn:multiInstanceLoopCharacteristics>
+        <bpmn:extensionElements>
+          <zeebe:loopCharacteristics inputCollection="=firstEvaluations" inputElement="subject" outputCollection="secondAssignments" outputElement="=context put(subject, &#34;secondExaminerId&#34;, secondExaminerId)" />
+        </bpmn:extensionElements>
+      </bpmn:multiInstanceLoopCharacteristics>
+    </bpmn:userTask>
+
+    <bpmn:userTask id="reEvaluateScript" name="Re-evaluate answer script">
+      <bpmn:documentation>Blind re-evaluation by the second independent examiner. The backend sets revisedMarks to the average of both examiners' marks (rounded half up).</bpmn:documentation>
+      <bpmn:extensionElements>
+        <zeebe:userTask />
+        <zeebe:formDefinition formId="re-evaluate-script" />
+        <zeebe:assignmentDefinition assignee="=subject.secondExaminerId" />
+        <zeebe:taskSchedule dueDate="=now() + duration(config.examinerSla)" />
+        <zeebe:ioMapping>
+          <zeebe:input source="=null" target="secondExaminerMarks" />
+          <zeebe:input source="=null" target="examinerRemarks" />
+          <zeebe:input source="=null" target="revisedMarks" />
+        </zeebe:ioMapping>
+      </bpmn:extensionElements>
+      <bpmn:incoming>flowToReEvaluate</bpmn:incoming>
+      <bpmn:outgoing>flowToCompare</bpmn:outgoing>
+      <bpmn:multiInstanceLoopCharacteristics>
+        <bpmn:extensionElements>
+          <zeebe:loopCharacteristics inputCollection="=secondAssignments" inputElement="subject" outputCollection="evaluations" outputElement="=context put(context put(context put(subject, &#34;secondExaminerMarks&#34;, secondExaminerMarks), &#34;examinerRemarks&#34;, examinerRemarks), &#34;revisedMarks&#34;, revisedMarks)" />
+        </bpmn:extensionElements>
+      </bpmn:multiInstanceLoopCharacteristics>
+    </bpmn:userTask>
+
+    <bpmn:businessRuleTask id="evaluateMarksDifference" name="Evaluate Marks Difference">
+      <bpmn:extensionElements>
+        <zeebe:calledDecision decisionId="marksComparisonDecision" resultVariable="marksIncreased" />
+        <zeebe:ioMapping>
+          <zeebe:input source="=subject.originalMarks" target="originalMarks" />
+          <zeebe:input source="=subject.revisedMarks" target="revisedMarks" />
+          <zeebe:input source="=null" target="marksIncreased" />
+        </zeebe:ioMapping>
+      </bpmn:extensionElements>
+      <bpmn:incoming>flowToCompare</bpmn:incoming>
+      <bpmn:outgoing>flowToMarksGateway</bpmn:outgoing>
+      <bpmn:multiInstanceLoopCharacteristics>
+        <bpmn:extensionElements>
+          <zeebe:loopCharacteristics inputCollection="=evaluations" inputElement="subject" outputCollection="subjectResults" outputElement="={subjectCode: subject.subjectCode, subjectName: subject.subjectName, department: subject.department, maxMarks: subject.maxMarks, scriptId: subject.scriptId, originalMarks: subject.originalMarks, proposedMarks: subject.revisedMarks, firstExaminerId: subject.firstExaminerId, firstExaminerMarks: subject.firstExaminerMarks, secondExaminerId: subject.secondExaminerId, secondExaminerMarks: subject.secondExaminerMarks, revisedMarks: subject.revisedMarks, markDifference: subject.revisedMarks - subject.originalMarks, marksIncreased: marksIncreased = true, outcome: if marksIncreased = true then &#34;REVISED&#34; else &#34;UNCHANGED&#34;}" />
+        </bpmn:extensionElements>
+      </bpmn:multiInstanceLoopCharacteristics>
+    </bpmn:businessRuleTask>
+
+    <bpmn:exclusiveGateway id="marksIncreasedGateway" name="Marks increased?" default="flowMarksNotIncreased">
+      <bpmn:incoming>flowToMarksGateway</bpmn:incoming>
+      <bpmn:outgoing>flowMarksIncreased</bpmn:outgoing>
+      <bpmn:outgoing>flowMarksNotIncreased</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ===================== Moderation and Approval ===================== -->
+
+    <bpmn:userTask id="hodReviewIncrease" name="HOD reviews mark increase">
+      <bpmn:documentation>The Head of the student's department reviews every subject whose marks increased and recommends approving or rejecting each increase (hodReview).</bpmn:documentation>
+      <bpmn:extensionElements>
+        <zeebe:userTask />
+        <zeebe:formDefinition formId="hod-review" />
+        <zeebe:assignmentDefinition candidateGroups="=[&#34;hod-&#34; + lower case(department)]" />
+        <zeebe:taskSchedule dueDate="=now() + duration(config.examinerSla)" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>flowMarksIncreased</bpmn:incoming>
+      <bpmn:outgoing>flowToCoeApproval</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:userTask id="coeApproveResult" name="CoE approves revised result">
+      <bpmn:documentation>The Controller of Examinations sees the HOD's recommendations and makes the final decision per subject. The backend writes the decision into subjectResults: a rejected increase becomes WITHHELD and keeps the original marks.</bpmn:documentation>
+      <bpmn:extensionElements>
+        <zeebe:userTask />
+        <zeebe:formDefinition formId="coe-approval" />
+        <zeebe:assignmentDefinition candidateGroups="coe" />
+        <zeebe:taskSchedule dueDate="=now() + duration(config.examinerSla)" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>flowToCoeApproval</bpmn:incoming>
+      <bpmn:outgoing>flowToIncreaseApprovedGateway</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="increaseApprovedGateway" name="Increase approved?" default="flowIncreaseNotApproved">
+      <bpmn:incoming>flowToIncreaseApprovedGateway</bpmn:incoming>
+      <bpmn:outgoing>flowIncreaseApproved</bpmn:outgoing>
+      <bpmn:outgoing>flowIncreaseNotApproved</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="updateOfficialResult" name="Update official result">
+      <bpmn:extensionElements>
+        <zeebe:userTask />
+        <zeebe:formDefinition formId="update-result" />
+        <zeebe:assignmentDefinition candidateGroups="exam-cell" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>flowIncreaseApproved</bpmn:incoming>
+      <bpmn:outgoing>flowUpdatedToPublish</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- ===================== Result Publication ===================== -->
+
+    <bpmn:serviceTask id="notifyResultPublished" name="Notify: Revaluation Result Published" zeebe:modelerTemplate="io.camunda.connectors.email.v1" zeebe:modelerTemplateVersion="2">
+      <bpmn:documentation>Start execution listener consolidate-results saves the final per-subject results to the database before the email is sent.</bpmn:documentation>
+      <bpmn:extensionElements>
+        <zeebe:executionListeners>
+          <zeebe:executionListener eventType="start" retries="3" type="consolidate-results" />
+        </zeebe:executionListeners>
+        <zeebe:taskDefinition type="io.camunda:email:1" retries="3" />
+        <zeebe:ioMapping>
+          <zeebe:input source="simple" target="authentication.type" />
+          <zeebe:input source="{{secrets.SMTP_USERNAME}}" target="authentication.username" />
+          <zeebe:input source="{{secrets.SMTP_PASSWORD}}" target="authentication.password" />
+          <zeebe:input source="smtp" target="protocol" />
+          <zeebe:input source="{{secrets.SMTP_HOST}}" target="data.smtpConfig.smtpHost" />
+          <zeebe:input source="{{secrets.SMTP_PORT}}" target="data.smtpConfig.smtpPort" />
+          <zeebe:input source="{{secrets.SMTP_SECURITY}}" target="data.smtpConfig.smtpCryptographicProtocol" />
+          <zeebe:input source="sendEmailSmtp" target="data.smtpActionDiscriminator" />
+          <zeebe:input source="{{secrets.SMTP_FROM}}" target="data.smtpAction.from" />
+          <zeebe:input source="=studentEmail" target="data.smtpAction.to" />
+          <zeebe:input source="=&#34;Revaluation result for &#34; + requestId" target="data.smtpAction.subject" />
+          <zeebe:input source="PLAIN" target="data.smtpAction.contentType" />
+          <zeebe:input source="=&#34;Dear &#34; + studentName + &#34;,\n\nThe revaluation of request &#34; + requestId + &#34; is complete.\n\n&#34; + string join(for r in subjectResults return r.subjectCode + &#34;: &#34; + string(r.originalMarks) + &#34; -&gt; &#34; + string(r.revisedMarks) + (if r.marksIncreased then &#34; (increased)&#34; else if r.outcome = &#34;WITHHELD&#34; then &#34; (increase not approved)&#34; else &#34; (unchanged)&#34;), &#34;\n&#34;) + &#34;\n\nOffice of the Controller of Examinations&#34;" target="data.smtpAction.body" />
+        </zeebe:ioMapping>
+        <zeebe:taskHeaders>
+          <zeebe:header key="retryBackoff" value="PT10S" />
+        </zeebe:taskHeaders>
+      </bpmn:extensionElements>
+      <bpmn:incoming>flowUpdatedToPublish</bpmn:incoming>
+      <bpmn:incoming>flowMarksNotIncreased</bpmn:incoming>
+      <bpmn:incoming>flowIncreaseNotApproved</bpmn:incoming>
+      <bpmn:outgoing>flowToCompleted</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:endEvent id="requestCompleted" name="Completed">
+      <bpmn:incoming>flowToCompleted</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ===================== Sequence flows ===================== -->
+
+    <bpmn:sequenceFlow id="flowToSubmit" sourceRef="requestStarted" targetRef="submitRevaluationRequest" />
+    <bpmn:sequenceFlow id="flowToVerify" sourceRef="submitRevaluationRequest" targetRef="verifyApplication" />
+    <bpmn:sequenceFlow id="flowToEligibility" sourceRef="verifyApplication" targetRef="evaluateEligibility" />
+    <bpmn:sequenceFlow id="flowToEligibleGateway" sourceRef="evaluateEligibility" targetRef="eligibleGateway" />
+    <bpmn:sequenceFlow id="flowEligible" name="Yes" sourceRef="eligibleGateway" targetRef="createRazorpayOrder">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">=eligibility.eligible = true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flowNotEligible" name="No" sourceRef="eligibleGateway" targetRef="notifyRejected" />
+    <bpmn:sequenceFlow id="flowToRejected" sourceRef="notifyRejected" targetRef="requestRejected" />
+    <bpmn:sequenceFlow id="flowToCheckout" sourceRef="createRazorpayOrder" targetRef="completeCheckoutAndVerifyPayment" />
+    <bpmn:sequenceFlow id="flowToPaymentGateway" sourceRef="completeCheckoutAndVerifyPayment" targetRef="paymentGateway" />
+    <bpmn:sequenceFlow id="flowPaymentSuccessful" name="Yes" sourceRef="paymentGateway" targetRef="clerkAssignExaminer">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">=paymentSuccessful = true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flowPaymentFailed" name="No" sourceRef="paymentGateway" targetRef="notifyPaymentFailed" />
+    <bpmn:sequenceFlow id="flowExpiredToNotify" sourceRef="paymentWindowExpired" targetRef="notifyPaymentFailed" />
+    <bpmn:sequenceFlow id="flowToClosedPaymentFailed" sourceRef="notifyPaymentFailed" targetRef="closedPaymentFailed" />
+    <bpmn:sequenceFlow id="flowToExaminerMarks" sourceRef="clerkAssignExaminer" targetRef="examinerSendsMarks" />
+    <bpmn:sequenceFlow id="flowToAssignSecond" sourceRef="examinerSendsMarks" targetRef="clerkAssignSecondExaminer" />
+    <bpmn:sequenceFlow id="flowToReEvaluate" sourceRef="clerkAssignSecondExaminer" targetRef="reEvaluateScript" />
+    <bpmn:sequenceFlow id="flowToCompare" sourceRef="reEvaluateScript" targetRef="evaluateMarksDifference" />
+    <bpmn:sequenceFlow id="flowToMarksGateway" sourceRef="evaluateMarksDifference" targetRef="marksIncreasedGateway" />
+    <bpmn:sequenceFlow id="flowMarksIncreased" name="Yes" sourceRef="marksIncreasedGateway" targetRef="hodReviewIncrease">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">=some r in subjectResults satisfies r.marksIncreased = true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flowToCoeApproval" sourceRef="hodReviewIncrease" targetRef="coeApproveResult" />
+    <bpmn:sequenceFlow id="flowToIncreaseApprovedGateway" sourceRef="coeApproveResult" targetRef="increaseApprovedGateway" />
+    <bpmn:sequenceFlow id="flowIncreaseApproved" name="Yes" sourceRef="increaseApprovedGateway" targetRef="updateOfficialResult">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">=some r in subjectResults satisfies r.marksIncreased = true</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flowIncreaseNotApproved" name="No" sourceRef="increaseApprovedGateway" targetRef="notifyResultPublished" />
+    <bpmn:sequenceFlow id="flowMarksNotIncreased" name="No" sourceRef="marksIncreasedGateway" targetRef="notifyResultPublished" />
+    <bpmn:sequenceFlow id="flowUpdatedToPublish" sourceRef="updateOfficialResult" targetRef="notifyResultPublished" />
+    <bpmn:sequenceFlow id="flowToCompleted" sourceRef="notifyResultPublished" targetRef="requestCompleted" />
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="Diagram_revaluationProcess">
+    <bpmndi:BPMNPlane id="Plane_revaluationProcess" bpmnElement="Collaboration_Revaluation">
+      <bpmndi:BPMNShape id="Participant_Revaluation_di" bpmnElement="Participant_Revaluation" isHorizontal="true">
+        <dc:Bounds x="150" y="80" width="2870" height="910" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Lane_RequestEligibility_di" bpmnElement="Lane_RequestEligibility" isHorizontal="true">
+        <dc:Bounds x="180" y="80" width="2840" height="160" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Lane_PaymentProcessing_di" bpmnElement="Lane_PaymentProcessing" isHorizontal="true">
+        <dc:Bounds x="180" y="240" width="2840" height="170" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Lane_ExaminationRevaluation_di" bpmnElement="Lane_ExaminationRevaluation" isHorizontal="true">
+        <dc:Bounds x="180" y="410" width="2840" height="240" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Lane_ModerationApproval_di" bpmnElement="Lane_ModerationApproval" isHorizontal="true">
+        <dc:Bounds x="180" y="650" width="2840" height="170" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Lane_ResultPublication_di" bpmnElement="Lane_ResultPublication" isHorizontal="true">
+        <dc:Bounds x="180" y="820" width="2840" height="170" />
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="requestStarted_di" bpmnElement="requestStarted">
+        <dc:Bounds x="232" y="142" width="36" height="36" />
+        <bpmndi:BPMNLabel><dc:Bounds x="212" y="185" width="76" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="submitRevaluationRequest_di" bpmnElement="submitRevaluationRequest">
+        <dc:Bounds x="310" y="120" width="120" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="verifyApplication_di" bpmnElement="verifyApplication">
+        <dc:Bounds x="480" y="120" width="120" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="evaluateEligibility_di" bpmnElement="evaluateEligibility">
+        <dc:Bounds x="650" y="120" width="120" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="eligibleGateway_di" bpmnElement="eligibleGateway" isMarkerVisible="true">
+        <dc:Bounds x="815" y="135" width="50" height="50" />
+        <bpmndi:BPMNLabel><dc:Bounds x="817" y="105" width="46" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="notifyRejected_di" bpmnElement="notifyRejected">
+        <dc:Bounds x="930" y="120" width="130" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="requestRejected_di" bpmnElement="requestRejected">
+        <dc:Bounds x="1122" y="142" width="36" height="36" />
+        <bpmndi:BPMNLabel><dc:Bounds x="1123" y="185" width="34" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="createRazorpayOrder_di" bpmnElement="createRazorpayOrder">
+        <dc:Bounds x="770" y="280" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="completeCheckoutAndVerifyPayment_di" bpmnElement="completeCheckoutAndVerifyPayment">
+        <dc:Bounds x="970" y="280" width="150" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="paymentWindowExpired_di" bpmnElement="paymentWindowExpired">
+        <dc:Bounds x="1027" y="342" width="36" height="36" />
+        <bpmndi:BPMNLabel><dc:Bounds x="1068" y="374" width="140" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="paymentGateway_di" bpmnElement="paymentGateway" isMarkerVisible="true">
+        <dc:Bounds x="1205" y="295" width="50" height="50" />
+        <bpmndi:BPMNLabel><dc:Bounds x="1182" y="258" width="96" height="27" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="notifyPaymentFailed_di" bpmnElement="notifyPaymentFailed">
+        <dc:Bounds x="1310" y="280" width="120" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="closedPaymentFailed_di" bpmnElement="closedPaymentFailed">
+        <dc:Bounds x="1492" y="302" width="36" height="36" />
+        <bpmndi:BPMNLabel><dc:Bounds x="1493" y="345" width="34" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="clerkAssignExaminer_di" bpmnElement="clerkAssignExaminer">
+        <dc:Bounds x="1160" y="490" width="140" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="examinerSendsMarks_di" bpmnElement="examinerSendsMarks">
+        <dc:Bounds x="1350" y="490" width="130" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="clerkAssignSecondExaminer_di" bpmnElement="clerkAssignSecondExaminer">
+        <dc:Bounds x="1530" y="490" width="130" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="reEvaluateScript_di" bpmnElement="reEvaluateScript">
+        <dc:Bounds x="1710" y="490" width="130" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="evaluateMarksDifference_di" bpmnElement="evaluateMarksDifference">
+        <dc:Bounds x="1890" y="490" width="120" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="marksIncreasedGateway_di" bpmnElement="marksIncreasedGateway" isMarkerVisible="true">
+        <dc:Bounds x="2095" y="505" width="50" height="50" />
+        <bpmndi:BPMNLabel><dc:Bounds x="2076" y="475" width="88" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="hodReviewIncrease_di" bpmnElement="hodReviewIncrease">
+        <dc:Bounds x="2055" y="695" width="130" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="coeApproveResult_di" bpmnElement="coeApproveResult">
+        <dc:Bounds x="2245" y="695" width="130" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="increaseApprovedGateway_di" bpmnElement="increaseApprovedGateway" isMarkerVisible="true">
+        <dc:Bounds x="2435" y="710" width="50" height="50" />
+        <bpmndi:BPMNLabel><dc:Bounds x="2415" y="680" width="94" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="updateOfficialResult_di" bpmnElement="updateOfficialResult">
+        <dc:Bounds x="2530" y="865" width="130" height="80" />
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="notifyResultPublished_di" bpmnElement="notifyResultPublished">
+        <dc:Bounds x="2720" y="865" width="150" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="requestCompleted_di" bpmnElement="requestCompleted">
+        <dc:Bounds x="2942" y="887" width="36" height="36" />
+        <bpmndi:BPMNLabel><dc:Bounds x="2933" y="930" width="54" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNEdge id="flowToSubmit_di" bpmnElement="flowToSubmit">
+        <di:waypoint x="268" y="160" />
+        <di:waypoint x="310" y="160" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowToVerify_di" bpmnElement="flowToVerify">
+        <di:waypoint x="430" y="160" />
+        <di:waypoint x="480" y="160" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowToEligibility_di" bpmnElement="flowToEligibility">
+        <di:waypoint x="600" y="160" />
+        <di:waypoint x="650" y="160" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowToEligibleGateway_di" bpmnElement="flowToEligibleGateway">
+        <di:waypoint x="770" y="160" />
+        <di:waypoint x="815" y="160" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowEligible_di" bpmnElement="flowEligible">
+        <di:waypoint x="840" y="185" />
+        <di:waypoint x="840" y="280" />
+        <bpmndi:BPMNLabel><dc:Bounds x="848" y="220" width="19" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowNotEligible_di" bpmnElement="flowNotEligible">
+        <di:waypoint x="865" y="160" />
+        <di:waypoint x="930" y="160" />
+        <bpmndi:BPMNLabel><dc:Bounds x="888" y="142" width="15" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowToRejected_di" bpmnElement="flowToRejected">
+        <di:waypoint x="1060" y="160" />
+        <di:waypoint x="1122" y="160" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowToCheckout_di" bpmnElement="flowToCheckout">
+        <di:waypoint x="910" y="320" />
+        <di:waypoint x="970" y="320" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowToPaymentGateway_di" bpmnElement="flowToPaymentGateway">
+        <di:waypoint x="1120" y="320" />
+        <di:waypoint x="1205" y="320" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowPaymentSuccessful_di" bpmnElement="flowPaymentSuccessful">
+        <di:waypoint x="1230" y="345" />
+        <di:waypoint x="1230" y="490" />
+        <bpmndi:BPMNLabel><dc:Bounds x="1238" y="430" width="19" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowPaymentFailed_di" bpmnElement="flowPaymentFailed">
+        <di:waypoint x="1255" y="320" />
+        <di:waypoint x="1310" y="320" />
+        <bpmndi:BPMNLabel><dc:Bounds x="1274" y="302" width="15" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowExpiredToNotify_di" bpmnElement="flowExpiredToNotify">
+        <di:waypoint x="1045" y="378" />
+        <di:waypoint x="1045" y="395" />
+        <di:waypoint x="1370" y="395" />
+        <di:waypoint x="1370" y="360" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowToClosedPaymentFailed_di" bpmnElement="flowToClosedPaymentFailed">
+        <di:waypoint x="1430" y="320" />
+        <di:waypoint x="1492" y="320" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowToExaminerMarks_di" bpmnElement="flowToExaminerMarks">
+        <di:waypoint x="1300" y="530" />
+        <di:waypoint x="1350" y="530" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowToAssignSecond_di" bpmnElement="flowToAssignSecond">
+        <di:waypoint x="1480" y="530" />
+        <di:waypoint x="1530" y="530" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowToReEvaluate_di" bpmnElement="flowToReEvaluate">
+        <di:waypoint x="1660" y="530" />
+        <di:waypoint x="1710" y="530" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowToCompare_di" bpmnElement="flowToCompare">
+        <di:waypoint x="1840" y="530" />
+        <di:waypoint x="1890" y="530" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowToMarksGateway_di" bpmnElement="flowToMarksGateway">
+        <di:waypoint x="2010" y="530" />
+        <di:waypoint x="2095" y="530" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowMarksIncreased_di" bpmnElement="flowMarksIncreased">
+        <di:waypoint x="2120" y="555" />
+        <di:waypoint x="2120" y="695" />
+        <bpmndi:BPMNLabel><dc:Bounds x="2128" y="610" width="19" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowToCoeApproval_di" bpmnElement="flowToCoeApproval">
+        <di:waypoint x="2185" y="735" />
+        <di:waypoint x="2245" y="735" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowToIncreaseApprovedGateway_di" bpmnElement="flowToIncreaseApprovedGateway">
+        <di:waypoint x="2375" y="735" />
+        <di:waypoint x="2435" y="735" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowIncreaseApproved_di" bpmnElement="flowIncreaseApproved">
+        <di:waypoint x="2460" y="760" />
+        <di:waypoint x="2460" y="905" />
+        <di:waypoint x="2530" y="905" />
+        <bpmndi:BPMNLabel><dc:Bounds x="2468" y="800" width="19" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowIncreaseNotApproved_di" bpmnElement="flowIncreaseNotApproved">
+        <di:waypoint x="2485" y="735" />
+        <di:waypoint x="2770" y="735" />
+        <di:waypoint x="2770" y="865" />
+        <bpmndi:BPMNLabel><dc:Bounds x="2590" y="717" width="15" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowMarksNotIncreased_di" bpmnElement="flowMarksNotIncreased">
+        <di:waypoint x="2145" y="530" />
+        <di:waypoint x="2830" y="530" />
+        <di:waypoint x="2830" y="865" />
+        <bpmndi:BPMNLabel><dc:Bounds x="2180" y="512" width="15" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowUpdatedToPublish_di" bpmnElement="flowUpdatedToPublish">
+        <di:waypoint x="2660" y="905" />
+        <di:waypoint x="2720" y="905" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="flowToCompleted_di" bpmnElement="flowToCompleted">
+        <di:waypoint x="2870" y="905" />
+        <di:waypoint x="2942" y="905" />
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

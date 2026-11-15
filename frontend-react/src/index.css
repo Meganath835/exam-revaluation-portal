@@ -1,0 +1,100 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* shadcn/ui theme: navy #0B2A55, blue #0B5394, yellow #FDC80A on light grey #F3F4F6. */
+@layer base {
+  :root {
+    --background: 220 14% 96%;
+    --foreground: 215 55% 14%;
+    --card: 0 0% 100%;
+    --card-foreground: 215 55% 14%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 215 55% 14%;
+    --primary: 208 86% 31%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 94%;
+    --secondary-foreground: 215 55% 14%;
+    --muted: 220 14% 94%;
+    --muted-foreground: 215 16% 40%;
+    --accent: 210 60% 94%;
+    --accent-foreground: 208 86% 31%;
+    --destructive: 4 76% 40%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 13% 89%;
+    --input: 220 13% 86%;
+    --ring: 208 86% 31%;
+    --gold: 47 98% 52%;
+    --gold-foreground: 215 77% 19%;
+    --gold-soft: 47 100% 92%;
+    --brand: 208 86% 31%;
+    --brand-soft: 210 60% 94%;
+    --ok: 155 74% 26%;
+    --ok-soft: 148 45% 93%;
+    --ok-foreground: 0 0% 100%;
+    --warn: 34 100% 27%;
+    --warn-soft: 39 81% 93%;
+    --warn-foreground: 0 0% 100%;
+    --pen: 4 76% 40%;
+    --pen-soft: 6 85% 95%;
+    --pen-foreground: 0 0% 100%;
+    --radius: 0.75rem;
+  }
+  /* Dark: "Shadow Black" (#171717) surfaces, lighter blue for links and buttons, the same yellow accents. */
+  .dark {
+    --background: 0 0% 9%;
+    --foreground: 0 0% 95%;
+    --card: 0 0% 12%;
+    --card-foreground: 0 0% 95%;
+    --popover: 0 0% 13%;
+    --popover-foreground: 0 0% 95%;
+    --primary: 207 82% 62%;
+    --primary-foreground: 216 60% 9%;
+    --secondary: 0 0% 16%;
+    --secondary-foreground: 0 0% 95%;
+    --muted: 0 0% 15%;
+    --muted-foreground: 0 0% 66%;
+    --accent: 210 25% 18%;
+    --accent-foreground: 207 85% 74%;
+    --destructive: 4 80% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 21%;
+    --input: 0 0% 26%;
+    --ring: 207 82% 62%;
+    --gold-soft: 47 55% 16%;
+    --brand: 207 82% 66%;
+    --brand-soft: 210 25% 18%;
+    --ok: 152 55% 55%;
+    --ok-soft: 155 40% 15%;
+    --ok-foreground: 155 60% 8%;
+    --warn: 38 92% 64%;
+    --warn-soft: 35 55% 15%;
+    --warn-foreground: 35 70% 9%;
+    --pen: 4 88% 70%;
+    --pen-soft: 4 45% 17%;
+    --pen-foreground: 4 70% 9%;
+  }
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground font-sans antialiased; }
+  h1, h2, h3 { @apply font-display tracking-tight; text-wrap: balance; }
+  :focus-visible { @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background; }
+}
+
+/* Helpers used by the task forms; they share the shadcn look (radius, shadow, focus ring). */
+@layer components {
+  .card { @apply rounded-xl border bg-card text-card-foreground shadow-sm; }
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-md font-medium text-sm min-h-[40px] px-4 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50; }
+  .btn-primary { @apply btn bg-primary text-primary-foreground hover:bg-primary/90; }
+  .btn-secondary { @apply btn border border-input bg-background hover:bg-accent hover:text-accent-foreground; }
+  .btn-danger { @apply btn border border-destructive/40 bg-background text-destructive hover:bg-destructive/10; }
+  .input { @apply flex w-full min-h-[40px] rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring; }
+  .input-error { @apply border-destructive focus-visible:ring-destructive; }
+  .label { @apply text-sm font-medium leading-none; }
+  .help { @apply text-[13px] text-muted-foreground; }
+  .err { @apply text-[13px] font-medium text-destructive; }
+  .chip { @apply inline-flex items-center whitespace-nowrap rounded-md px-2 py-0.5 text-xs font-semibold; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}

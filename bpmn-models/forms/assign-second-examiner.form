@@ -1,0 +1,7 @@
+{
+  "executionPlatform": "Camunda Cloud", "executionPlatformVersion": "8.9.0", "exporter": {"name": "Camunda Modeler", "version": "5.46.1"}, "schemaVersion": 18, "type": "default", "id": "assign-second-examiner",
+  "components": [
+    { "type": "text", "id": "Text_Header", "text": "=\"### Assign a second independent examiner\n\" + subject.subjectCode + \" \" + subject.subjectName + \": first examiner \" + subject.firstExaminerId + \" gave \" + string(subject.firstExaminerMarks) + \"/\" + string(subject.maxMarks) + \".\"" },
+    { "type": "textfield", "id": "Field_SecondExaminerId", "key": "secondExaminerId", "label": "Second examiner username", "description": "Same department, not the first evaluator or the first examiner", "validate": { "required": true } }
+  ]
+}
