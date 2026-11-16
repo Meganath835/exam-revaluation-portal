@@ -10,7 +10,7 @@ T8  second open request, same session -> 409 before anything starts
 T3  student doesn't pay             -> payment window timer -> Notify Payment Failure -> Closed (unpaid)
 T7  no mark increases               -> Marks increased? No -> straight to publication
 T5  no scanned script (CS399)       -> clerk must enter the physical script id
-T6  examiner not independent        -> clerk's choice rejected; CoE rejects the increase -> WITHHELD
+T6  examiner not independent, or the same examiner twice -> clerk's choice rejected; CoE rejects the increase -> WITHHELD
 """
 import traceback
 from api import *
@@ -33,20 +33,26 @@ def pay(rid, student):
     pay_info(rid, student)
     s, b = api("POST", f"/api/payments/{rid}/mock-checkout", student, {"outcome": "success"}); assert s == 200 and b["status"] == "PAID", b
 
-def examiner_task(rid, element, code, pool):
+def examiner_tasks(rid, code, pool):
+    """The open tasks of both examiners of one subject (they work in parallel): {examiner: task}."""
     def f():
+        found = {}
         for ex in pool:
             for t in api("GET", "/api/tasks?view=mine", ex)[1]:
-                if t["elementId"] == element and t["requestId"] == rid and t["subjectCode"] == code: return ex, t
-    return wait(f, f"{element} {code}")
+                if t["elementId"] == "examinerSendsMarks" and t["requestId"] == rid and t["subjectCode"] == code: found[ex] = t
+        return found if len(found) == 2 else None
+    return wait(f, f"both examiner tasks for {code}")
+
+def evaluate(rid, code, m1, m2, pool):
+    tasks = examiner_tasks(rid, code, pool)
+    for (ex, t), m in zip(sorted(tasks.items()), (m1, m2)): complete(ex, t, {"examinerMarks": m, "examinerRemarks": "ok"})
+    return tasks
 
 def revalue(rid, code, m1, m2, pool, script=None):
     t = task_for("examcell.clerk", "clerkAssignExaminer", rid, view="group", subject=code)
-    complete("examcell.clerk", t, {"firstExaminerId": t["context"]["suggestedExaminerId"], "scriptId": script or t["context"]["archivedScriptId"]})
-    ex, t = examiner_task(rid, "examinerSendsMarks", code, pool); complete(ex, t, {"firstExaminerMarks": m1, "firstExaminerRemarks": "ok"})
-    t = task_for("examcell.clerk", "clerkAssignSecondExaminer", rid, view="group", subject=code)
-    complete("examcell.clerk", t, {"secondExaminerId": t["context"]["suggestedExaminerId"]})
-    ex, t = examiner_task(rid, "reEvaluateScript", code, pool); complete(ex, t, {"secondExaminerMarks": m2, "examinerRemarks": "ok"})
+    c = t["context"]
+    complete("examcell.clerk", t, {"firstExaminerId": c["suggestedExaminerId"], "secondExaminerId": c["suggestedSecondExaminerId"], "scriptId": script or c["archivedScriptId"]})
+    evaluate(rid, code, m1, m2, pool)
 
 def run(name, fn):
     try: results[name] = "PASS " + str(fn())
@@ -91,36 +97,32 @@ def t3_t7():
     old = status(T8_RID, S)
     assert old["status"] == "CLOSED_UNPAID", old["status"]
     assert {x["key"]: x["state"] for x in old["stages"]}["paid"] == "stopped", old["stages"]
-    # T7: no increase, so no HOD/CoE approval and no Update official result.
+    # T7: no increase, so no CoE approval and no Update official result.
     pay(rid, S)
     revalue(rid, "CS310", 60, 59, ["examiner.cs01", "examiner.cs02"])   # 61 -> 60 (rounded half up): not increased
     st = final(rid, S, "COMPLETED")
     s, d = api("GET", f"/api/process-view/requests/{rid}", "examcell.clerk")
-    assert not {"hodReviewIncrease", "updateOfficialResult"} & {x["elementId"] for x in d["tasks"]}, "No-branch must skip approval and update"
+    assert not {"coeApproveResult", "updateOfficialResult"} & {x["elementId"] for x in d["tasks"]}, "No-branch must skip approval and update"
     return "T3 CLOSED_UNPAID; T7 " + str([(x["subjectCode"], x["originalMarks"], x["revisedMarks"], x["outcome"]) for x in st["subjects"]])
 
 def t5_t6():
     rid = create(S, "MAY-2026", [{"subjectCode": "CS399", "originalMarks": 33}])
     pay(rid, S)
     t = task_for("examcell.clerk", "clerkAssignExaminer", rid, view="group", subject="CS399")
-    assert t["context"]["archivedScriptId"] is None, t["context"]
-    s, b = api("POST", f"/api/tasks/{t['key']}/complete", "examcell.clerk", {"variables": {"firstExaminerId": t["context"]["suggestedExaminerId"], "scriptId": ""}})
+    c = t["context"]
+    assert c["archivedScriptId"] is None, c
+    first, second = c["suggestedExaminerId"], c["suggestedSecondExaminerId"]
+    url = f"/api/tasks/{t['key']}/complete"
+    s, b = api("POST", url, "examcell.clerk", {"variables": {"firstExaminerId": first, "secondExaminerId": second, "scriptId": ""}})
     assert s == 400 and "scriptId" in b["fieldErrors"], (s, b)
-    s, b = api("POST", f"/api/tasks/{t['key']}/complete", "examcell.clerk", {"variables": {"firstExaminerId": t["context"]["firstEvaluator"], "scriptId": "SCR-PHYS-77"}})
+    s, b = api("POST", url, "examcell.clerk", {"variables": {"firstExaminerId": c["firstEvaluator"], "secondExaminerId": second, "scriptId": "SCR-PHYS-77"}})
     assert s == 400 and "first evaluation" in b["fieldErrors"]["firstExaminerId"], (s, b)
-    first = t["context"]["suggestedExaminerId"]
-    complete("examcell.clerk", t, {"firstExaminerId": first, "scriptId": "SCR-PHYS-77"})
-    ex, et = examiner_task(rid, "examinerSendsMarks", "CS399", ["examiner.cs01", "examiner.cs03"])
-    assert et["context"]["subject"]["scriptId"] == "SCR-PHYS-77"
-    complete(ex, et, {"firstExaminerMarks": 45, "firstExaminerRemarks": "ok"})
-    t = task_for("examcell.clerk", "clerkAssignSecondExaminer", rid, view="group", subject="CS399")
-    s, b = api("POST", f"/api/tasks/{t['key']}/complete", "examcell.clerk", {"variables": {"secondExaminerId": first}})
-    assert s == 400 and "already revalued" in b["fieldErrors"]["secondExaminerId"], (s, b)
-    complete("examcell.clerk", t, {"secondExaminerId": t["context"]["suggestedExaminerId"]})
-    ex, et = examiner_task(rid, "reEvaluateScript", "CS399", ["examiner.cs01", "examiner.cs03"]); complete(ex, et, {"secondExaminerMarks": 47, "examinerRemarks": "ok"})
-    # HOD recommends approval, but the CoE rejects: the increase is withheld and nothing is updated.
-    t = task_for("hod.cse", "hodReviewIncrease", rid, view="group")
-    complete("hod.cse", t, {"decisions": [{"subjectCode": "CS399", "approve": True, "remarks": ""}]})
+    s, b = api("POST", url, "examcell.clerk", {"variables": {"firstExaminerId": first, "secondExaminerId": first, "scriptId": "SCR-PHYS-77"}})
+    assert s == 400 and "two different examiners" in b["fieldErrors"]["secondExaminerId"], (s, b)
+    complete("examcell.clerk", t, {"firstExaminerId": first, "secondExaminerId": second, "scriptId": "SCR-PHYS-77"})
+    tasks = evaluate(rid, "CS399", 45, 47, ["examiner.cs01", "examiner.cs03"])
+    assert all(x["context"]["subject"]["scriptId"] == "SCR-PHYS-77" for x in tasks.values()), tasks
+    # The CoE rejects the increase: it is withheld and nothing is updated.
     t = task_for("coe", "coeApproveResult", rid, view="group")
     s, b = api("POST", f"/api/tasks/{t['key']}/complete", "coe", {"variables": {"decisions": [{"subjectCode": "CS399", "approve": False, "remarks": ""}]}})
     assert s == 400 and "reason" in b["fieldErrors"]["decisions"], (s, b)

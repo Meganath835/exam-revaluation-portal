@@ -19,7 +19,7 @@ check("exam cell gets one request's process detail", api("GET", f"/api/process-v
 check("exam cell gets the instance diagram", api("GET", f"/api/requests/{rid}/diagram", "examcell.clerk")[0] == 200)
 check("exam cell status includes BPMN elements", len(status(rid, "examcell.clerk")["elements"]) > 0)
 
-for user in ["21CS042", "examiner.cs01", "coe", "hod.cse"]:
+for user in ["21CS042", "examiner.cs01", "coe"]:
     for path in ["/api/process-view", "/api/process-view/definition", f"/api/process-view/requests/{rid}", f"/api/requests/{rid}/diagram"]:
         s, b = api("GET", path, user)
         check(f"{user} is refused {path}", s == 403, (s, b))
@@ -34,6 +34,7 @@ if other:
     check("student can't open another student's request", api("GET", f"/api/requests/{other['requestId']}/status", "21CS042")[0] == 404)
 removed = {"21CS057", "21EC013", "examiner.ec01", "examiner.ec02", "examiner.ec03"}
 check("trimmed demo users are gone", not removed & {u["username"] for u in api("GET", "/api/users")[1]})
+check("HOD and dean sign-ins are gone", not {"hod.cse", "hod.ece", "dean.academics"} & {u["username"] for u in api("GET", "/api/users")[1]})
 check("accounts (refund) user no longer exists", not any(u["username"] == "accounts.01" for u in api("GET", "/api/users")[1]))
 # The mock is served by the backend itself (nginx only proxies /api), so ask the backend directly.
 import api as _api

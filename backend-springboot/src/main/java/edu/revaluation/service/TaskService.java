@@ -20,12 +20,14 @@ import org.springframework.transaction.annotation.Transactional;
 public class TaskService {
   /** Variables copied into the task view, per task. Anything else stays on the server. */
   private static final List<String> CONTEXT_VARS = List.of(
-      "requestId", "studentId", "studentName", "department", "examSession", "subject", "subjects", "subjectResults", "hodReview", "resultPublishedOn");
+      "requestId", "studentId", "studentName", "department", "examSession", "subject", "subjects", "subjectResults", "resultPublishedOn");
 
-  /** Blind evaluation: the examiner must not see who wrote the script, the first marks or another examiner's marks. */
+  /** Blind evaluation: the examiner must not see who wrote the script, the original marks or who the other examiner is. */
   private static final Set<String> HIDDEN_FROM_EXAMINER = Set.of("studentId", "studentName", "subjects", "subjectResults");
-  private static final Set<String> SUBJECT_FIELDS_HIDDEN_FROM_EXAMINER = Set.of(
-      "originalMarks", "firstExaminerId", "firstExaminerMarks", "firstExaminerRemarks", "secondExaminerId");
+  private static final Set<String> SUBJECT_FIELDS_HIDDEN_FROM_EXAMINER = Set.of("originalMarks", "firstExaminerId", "secondExaminerId");
+
+  private static final String STAGE_WITH_EXAMINERS = "With two independent examiners";
+  private static final String STAGE_ONE_RECEIVED = "One of two evaluations received";
 
   private final CamundaGateway camunda;
   private final RevaluationRequestRepository requests;
@@ -124,52 +126,32 @@ public class TaskService {
         out.put("verifiedBy", user.getUsername());
       }
       case ASSIGN_EXAMINER -> {
-        String examiner = str(in.get("firstExaminerId"));
-        String problem = assignment.problemWith(examiner, code, department, List.of());
+        // Two different independent examiners, who then evaluate the script at the same time.
+        String first = str(in.get("firstExaminerId"));
+        String second = str(in.get("secondExaminerId"));
+        String problem = assignment.problemWith(first, code, department, List.of());
         if (problem != null) errors.put("firstExaminerId", problem);
+        problem = assignment.problemWith(second, code, department, first.isBlank() ? List.of() : List.of(first));
+        if (problem != null) errors.put("secondExaminerId", problem);
         String scriptId = str(in.get("scriptId"));
         if (scriptId.isBlank()) {
           scriptId = assignment.archivedScriptId(str(ctx.get("studentId")), code).orElse("");
           if (scriptId.isBlank()) errors.put("scriptId", "No scanned script for " + code + " in the archive. Retrieve the physical script and enter its ID.");
         }
-        out.put("firstExaminerId", examiner);
+        out.put("firstExaminerId", first);
+        out.put("secondExaminerId", second);
         out.put("scriptId", scriptId);
       }
       case EXAMINER_MARKS -> {
-        Integer marks = marks(in.get("firstExaminerMarks"), max, "firstExaminerMarks", errors);
-        String remarks = str(in.get("firstExaminerRemarks"));
-        if (remarks.isBlank()) errors.put("firstExaminerRemarks", "Add remarks for the exam cell.");
-        out.put("firstExaminerMarks", marks);
-        out.put("firstExaminerRemarks", remarks);
-      }
-      case ASSIGN_SECOND_EXAMINER -> {
-        String examiner = str(in.get("secondExaminerId"));
-        String problem = assignment.problemWith(examiner, code, department, List.of(str(subject.get("firstExaminerId"))));
-        if (problem != null) errors.put("secondExaminerId", problem);
-        out.put("secondExaminerId", examiner);
-      }
-      case RE_EVALUATE -> {
-        Integer marks = marks(in.get("secondExaminerMarks"), max, "secondExaminerMarks", errors);
+        // The same task for both examiners. The process averages the two marks once both are in.
+        Integer marks = marks(in.get("examinerMarks"), max, "examinerMarks", errors);
         String remarks = str(in.get("examinerRemarks"));
         if (remarks.isBlank()) errors.put("examinerRemarks", "Add remarks for the exam cell.");
-        Integer first = integer(subject.get("firstExaminerMarks"));
-        out.put("secondExaminerMarks", marks);
+        out.put("examinerMarks", marks);
         out.put("examinerRemarks", remarks);
-        // Final revised marks: the average of both independent examiners, rounded half up.
-        out.put("revisedMarks", marks == null || first == null ? null : averageOf(first, marks));
-      }
-      case HOD_REVIEW -> {
-        Map<String, Map<String, Object>> decisions = decisions(in, ctx, errors);
-        List<Map<String, Object>> review = new ArrayList<>();
-        decisions.forEach((c, d) -> review.add(new LinkedHashMap<>(Map.of(
-            "subjectCode", c, "recommendation", Boolean.TRUE.equals(d.get("approve")) ? "APPROVE" : "REJECT",
-            "remarks", d.get("remarks"), "reviewedBy", user.getUsername()))));
-        out.put("hodReview", review);
       }
       case COE_APPROVAL -> {
         Map<String, Map<String, Object>> decisions = decisions(in, ctx, errors);
-        Map<String, Map<String, Object>> hod = new HashMap<>();
-        for (Object o : list(ctx.get("hodReview"))) hod.put(str(map(o).get("subjectCode")), map(o));
         // The CoE's decision is final: a rejected increase is withheld and the original marks stand.
         List<Map<String, Object>> results = new ArrayList<>();
         for (Object o : list(ctx.get("subjectResults"))) {
@@ -177,8 +159,6 @@ public class TaskService {
           Map<String, Object> d = decisions.get(str(r.get("subjectCode")));
           if (d != null) {
             boolean approved = Boolean.TRUE.equals(d.get("approve"));
-            r.put("hodRecommendation", hod.getOrDefault(str(r.get("subjectCode")), Map.of()).get("recommendation"));
-            r.put("hodRemarks", hod.getOrDefault(str(r.get("subjectCode")), Map.of()).get("remarks"));
             r.put("coeApproved", approved);
             r.put("coeRemarks", d.get("remarks"));
             if (!approved) {
@@ -228,10 +208,6 @@ public class TaskService {
     return out;
   }
 
-  static int averageOf(int first, int second) {
-    return (first + second + 1) / 2;
-  }
-
   /** Keeps the database (tracker and reports) in step with what people decided. */
   private void afterComplete(AppUser user, String elementId, Map<String, Object> vars, Map<String, Object> ctx) {
     String requestId = str(ctx.get("requestId"));
@@ -249,27 +225,19 @@ public class TaskService {
       case ASSIGN_EXAMINER -> {
         if (subject != null) {
           subject.setExaminerId(str(vars.get("firstExaminerId")));
+          subject.setSecondExaminerId(str(vars.get("secondExaminerId")));
           subject.setScriptId(str(vars.get("scriptId")));
-          subject.setStage("With the first examiner");
+          subject.setStage(STAGE_WITH_EXAMINERS);
         }
-        events.record(requestId, "Exam cell assigned an independent examiner for " + code + ".");
+        events.record(requestId, "Exam cell assigned two independent examiners for " + code + ".");
       }
       case EXAMINER_MARKS -> {
-        if (subject != null) subject.setStage("First evaluation received: assigning a second examiner");
-        events.record(requestId, "First examiner sent updated marks for " + code + " to the exam cell.");
-      }
-      case ASSIGN_SECOND_EXAMINER -> {
+        // Both examiners work in parallel, so either may finish first.
         if (subject != null) {
-          subject.setExaminerId(str(vars.get("secondExaminerId")));
-          subject.setStage("With the second examiner");
+          subject.setStage(STAGE_ONE_RECEIVED.equals(subject.getStage()) ? "Both evaluations received: comparing marks" : STAGE_ONE_RECEIVED);
         }
-        events.record(requestId, "Exam cell assigned a second independent examiner for " + code + ".");
+        events.record(requestId, "An examiner sent updated marks for " + code + " to the exam cell.");
       }
-      case RE_EVALUATE -> {
-        if (subject != null) subject.setStage("Re-evaluated: comparing marks");
-        events.record(requestId, "Second examiner re-evaluated the answer script for " + code + ".");
-      }
-      case HOD_REVIEW -> events.record(requestId, user.getDisplayName() + " reviewed the mark increase.");
       case COE_APPROVAL -> {
         long rejected = list(vars.get("subjectResults")).stream().filter(o -> "WITHHELD".equals(map(o).get("outcome"))).count();
         events.record(requestId, "Controller of Examinations " + (rejected == 0 ? "approved the revised result." : "withheld " + rejected + " increase(s)."));
@@ -309,18 +277,16 @@ public class TaskService {
         open && (mine || t.getAssignee() == null) && !CHECKOUT.equals(t.getElementId()));
   }
 
-  /** What the exam cell needs to pick an independent examiner: who to avoid, a suggestion, the archived script. */
+  /** What the exam cell needs to pick two independent examiners: who to avoid, two suggestions, the archived script. */
   private void addAssignmentHints(String elementId, Map<String, Object> ctx) {
-    if (!ASSIGN_EXAMINER.equals(elementId) && !ASSIGN_SECOND_EXAMINER.equals(elementId)) return;
+    if (!ASSIGN_EXAMINER.equals(elementId)) return;
     Map<String, Object> subject = map(ctx.get("subject"));
     String code = str(subject.get("subjectCode"));
-    String department = str(subject.get("department"));
-    List<String> exclude = ASSIGN_SECOND_EXAMINER.equals(elementId) ? List.of(str(subject.get("firstExaminerId"))) : List.of();
+    List<AppUser> suggested = assignment.suggestions(code, str(subject.get("department")));
     ctx.put("firstEvaluator", assignment.firstEvaluator(code));
-    ctx.put("suggestedExaminerId", assignment.suggest(code, department, exclude).map(AppUser::getUsername).orElse(null));
-    if (ASSIGN_EXAMINER.equals(elementId)) {
-      ctx.put("archivedScriptId", assignment.archivedScriptId(str(ctx.get("studentId")), code).orElse(null));
-    }
+    ctx.put("suggestedExaminerId", suggested.isEmpty() ? null : suggested.get(0).getUsername());
+    ctx.put("suggestedSecondExaminerId", suggested.size() < 2 ? null : suggested.get(1).getUsername());
+    ctx.put("archivedScriptId", assignment.archivedScriptId(str(ctx.get("studentId")), code).orElse(null));
   }
 
   // ---- small conversion helpers -----------------------------------------------------------------

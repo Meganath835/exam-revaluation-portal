@@ -4,7 +4,7 @@
     <bpmn:participant id="Participant_Revaluation" name="Examination Revaluation Request" processRef="revaluationProcess" />
   </bpmn:collaboration>
   <bpmn:process id="revaluationProcess" name="Examination Revaluation Request" isExecutable="true">
-    <bpmn:documentation>Main process. Started by the Spring Boot backend (POST /api/requests) with the start payload described in the README. Each examination task runs once per subject (parallel multi-instance).</bpmn:documentation>
+    <bpmn:documentation>Main process. Started by the Spring Boot backend (POST /api/requests) with the start payload described in the README. The clerk assigns two independent examiners per subject (parallel multi-instance per subject); both examiners then evaluate at the same time (parallel multi-instance per subject and examiner).</bpmn:documentation>
     <bpmn:laneSet id="LaneSet_Revaluation">
       <bpmn:lane id="Lane_RequestEligibility" name="Request and Eligibility">
         <bpmn:flowNodeRef>requestStarted</bpmn:flowNodeRef>
@@ -26,13 +26,10 @@
       <bpmn:lane id="Lane_ExaminationRevaluation" name="Examination and Revaluation">
         <bpmn:flowNodeRef>clerkAssignExaminer</bpmn:flowNodeRef>
         <bpmn:flowNodeRef>examinerSendsMarks</bpmn:flowNodeRef>
-        <bpmn:flowNodeRef>clerkAssignSecondExaminer</bpmn:flowNodeRef>
-        <bpmn:flowNodeRef>reEvaluateScript</bpmn:flowNodeRef>
         <bpmn:flowNodeRef>evaluateMarksDifference</bpmn:flowNodeRef>
         <bpmn:flowNodeRef>marksIncreasedGateway</bpmn:flowNodeRef>
       </bpmn:lane>
       <bpmn:lane id="Lane_ModerationApproval" name="Moderation and Approval">
-        <bpmn:flowNodeRef>hodReviewIncrease</bpmn:flowNodeRef>
         <bpmn:flowNodeRef>coeApproveResult</bpmn:flowNodeRef>
         <bpmn:flowNodeRef>increaseApprovedGateway</bpmn:flowNodeRef>
       </bpmn:lane>
@@ -212,14 +209,15 @@
 
     <!-- ===================== Examination and Revaluation (one instance per subject) ===================== -->
 
-    <bpmn:userTask id="clerkAssignExaminer" name="Clerk assigns independent examiner">
-      <bpmn:documentation>Exam cell picks an examiner from the subject's department who did not do the first evaluation, and confirms the answer script id.</bpmn:documentation>
+    <bpmn:userTask id="clerkAssignExaminer" name="Clerk assigns independent examiners">
+      <bpmn:documentation>Exam cell picks two different examiners from the subject's department, neither of whom did the first evaluation, and confirms the answer script id.</bpmn:documentation>
       <bpmn:extensionElements>
         <zeebe:userTask />
         <zeebe:formDefinition formId="assign-examiner" />
         <zeebe:assignmentDefinition candidateGroups="exam-cell" />
         <zeebe:ioMapping>
           <zeebe:input source="=null" target="firstExaminerId" />
+          <zeebe:input source="=null" target="secondExaminerId" />
           <zeebe:input source="=null" target="scriptId" />
         </zeebe:ioMapping>
       </bpmn:extensionElements>
@@ -227,79 +225,41 @@
       <bpmn:outgoing>flowToExaminerMarks</bpmn:outgoing>
       <bpmn:multiInstanceLoopCharacteristics>
         <bpmn:extensionElements>
-          <zeebe:loopCharacteristics inputCollection="=subjects" inputElement="subject" outputCollection="firstAssignments" outputElement="=context put(context put(subject, &#34;firstExaminerId&#34;, firstExaminerId), &#34;scriptId&#34;, scriptId)" />
+          <zeebe:loopCharacteristics inputCollection="=subjects" inputElement="subject" outputCollection="assignments" outputElement="=context put(context put(context put(subject, &#34;firstExaminerId&#34;, firstExaminerId), &#34;secondExaminerId&#34;, secondExaminerId), &#34;scriptId&#34;, scriptId)" />
         </bpmn:extensionElements>
       </bpmn:multiInstanceLoopCharacteristics>
     </bpmn:userTask>
 
     <bpmn:userTask id="examinerSendsMarks" name="Examiner sends updated marks to clerk">
-      <bpmn:documentation>Blind re-evaluation by the first independent examiner. The examiner does not see the student's identity or the original marks.</bpmn:documentation>
+      <bpmn:documentation>Blind re-evaluation. One instance per subject and examiner, all in parallel: both independent examiners of a subject evaluate the script at the same time. An examiner does not see the student's identity, the original marks or the other examiner.</bpmn:documentation>
       <bpmn:extensionElements>
         <zeebe:userTask />
         <zeebe:formDefinition formId="examiner-marks" />
-        <zeebe:assignmentDefinition assignee="=subject.firstExaminerId" />
+        <zeebe:assignmentDefinition assignee="=subject.examinerId" />
         <zeebe:taskSchedule dueDate="=now() + duration(config.examinerSla)" />
         <zeebe:ioMapping>
-          <zeebe:input source="=null" target="firstExaminerMarks" />
-          <zeebe:input source="=null" target="firstExaminerRemarks" />
+          <zeebe:input source="=null" target="examinerMarks" />
+          <zeebe:input source="=null" target="examinerRemarks" />
         </zeebe:ioMapping>
       </bpmn:extensionElements>
       <bpmn:incoming>flowToExaminerMarks</bpmn:incoming>
-      <bpmn:outgoing>flowToAssignSecond</bpmn:outgoing>
-      <bpmn:multiInstanceLoopCharacteristics>
-        <bpmn:extensionElements>
-          <zeebe:loopCharacteristics inputCollection="=firstAssignments" inputElement="subject" outputCollection="firstEvaluations" outputElement="=context put(context put(subject, &#34;firstExaminerMarks&#34;, firstExaminerMarks), &#34;firstExaminerRemarks&#34;, firstExaminerRemarks)" />
-        </bpmn:extensionElements>
-      </bpmn:multiInstanceLoopCharacteristics>
-    </bpmn:userTask>
-
-    <bpmn:userTask id="clerkAssignSecondExaminer" name="Clerk assigns second independent examiner">
-      <bpmn:documentation>Exam cell sees the first examiner's marks and picks a second examiner who is neither the first evaluator nor the first revaluation examiner.</bpmn:documentation>
-      <bpmn:extensionElements>
-        <zeebe:userTask />
-        <zeebe:formDefinition formId="assign-second-examiner" />
-        <zeebe:assignmentDefinition candidateGroups="exam-cell" />
-        <zeebe:ioMapping>
-          <zeebe:input source="=null" target="secondExaminerId" />
-        </zeebe:ioMapping>
-      </bpmn:extensionElements>
-      <bpmn:incoming>flowToAssignSecond</bpmn:incoming>
-      <bpmn:outgoing>flowToReEvaluate</bpmn:outgoing>
-      <bpmn:multiInstanceLoopCharacteristics>
-        <bpmn:extensionElements>
-          <zeebe:loopCharacteristics inputCollection="=firstEvaluations" inputElement="subject" outputCollection="secondAssignments" outputElement="=context put(subject, &#34;secondExaminerId&#34;, secondExaminerId)" />
-        </bpmn:extensionElements>
-      </bpmn:multiInstanceLoopCharacteristics>
-    </bpmn:userTask>
-
-    <bpmn:userTask id="reEvaluateScript" name="Re-evaluate answer script">
-      <bpmn:documentation>Blind re-evaluation by the second independent examiner. The backend sets revisedMarks to the average of both examiners' marks (rounded half up).</bpmn:documentation>
-      <bpmn:extensionElements>
-        <zeebe:userTask />
-        <zeebe:formDefinition formId="re-evaluate-script" />
-        <zeebe:assignmentDefinition assignee="=subject.secondExaminerId" />
-        <zeebe:taskSchedule dueDate="=now() + duration(config.examinerSla)" />
-        <zeebe:ioMapping>
-          <zeebe:input source="=null" target="secondExaminerMarks" />
-          <zeebe:input source="=null" target="examinerRemarks" />
-          <zeebe:input source="=null" target="revisedMarks" />
-        </zeebe:ioMapping>
-      </bpmn:extensionElements>
-      <bpmn:incoming>flowToReEvaluate</bpmn:incoming>
       <bpmn:outgoing>flowToCompare</bpmn:outgoing>
       <bpmn:multiInstanceLoopCharacteristics>
         <bpmn:extensionElements>
-          <zeebe:loopCharacteristics inputCollection="=secondAssignments" inputElement="subject" outputCollection="evaluations" outputElement="=context put(context put(context put(subject, &#34;secondExaminerMarks&#34;, secondExaminerMarks), &#34;examinerRemarks&#34;, examinerRemarks), &#34;revisedMarks&#34;, revisedMarks)" />
+          <zeebe:loopCharacteristics inputCollection="=for s in assignments, n in [1, 2] return context put(context put(s, &#34;examinerNo&#34;, n), &#34;examinerId&#34;, if n = 1 then s.firstExaminerId else s.secondExaminerId)" inputElement="subject" outputCollection="evaluations" outputElement="={subjectCode: subject.subjectCode, examinerNo: subject.examinerNo, examinerId: subject.examinerId, marks: examinerMarks, remarks: examinerRemarks}" />
         </bpmn:extensionElements>
       </bpmn:multiInstanceLoopCharacteristics>
     </bpmn:userTask>
 
     <bpmn:businessRuleTask id="evaluateMarksDifference" name="Evaluate Marks Difference">
+      <bpmn:documentation>Once per subject. Revised marks are the average of both examiners' marks, rounded half up; the decision table compares them with the original marks.</bpmn:documentation>
       <bpmn:extensionElements>
         <zeebe:calledDecision decisionId="marksComparisonDecision" resultVariable="marksIncreased" />
         <zeebe:ioMapping>
           <zeebe:input source="=subject.originalMarks" target="originalMarks" />
-          <zeebe:input source="=subject.revisedMarks" target="revisedMarks" />
+          <zeebe:input source="=evaluations[item.subjectCode = subject.subjectCode and item.examinerNo = 1][1].marks" target="firstExaminerMarks" />
+          <zeebe:input source="=evaluations[item.subjectCode = subject.subjectCode and item.examinerNo = 2][1].marks" target="secondExaminerMarks" />
+          <zeebe:input source="=floor((sum(evaluations[item.subjectCode = subject.subjectCode].marks) + 1) / 2)" target="revisedMarks" />
           <zeebe:input source="=null" target="marksIncreased" />
         </zeebe:ioMapping>
       </bpmn:extensionElements>
@@ -307,7 +267,7 @@
       <bpmn:outgoing>flowToMarksGateway</bpmn:outgoing>
       <bpmn:multiInstanceLoopCharacteristics>
         <bpmn:extensionElements>
-          <zeebe:loopCharacteristics inputCollection="=evaluations" inputElement="subject" outputCollection="subjectResults" outputElement="={subjectCode: subject.subjectCode, subjectName: subject.subjectName, department: subject.department, maxMarks: subject.maxMarks, scriptId: subject.scriptId, originalMarks: subject.originalMarks, proposedMarks: subject.revisedMarks, firstExaminerId: subject.firstExaminerId, firstExaminerMarks: subject.firstExaminerMarks, secondExaminerId: subject.secondExaminerId, secondExaminerMarks: subject.secondExaminerMarks, revisedMarks: subject.revisedMarks, markDifference: subject.revisedMarks - subject.originalMarks, marksIncreased: marksIncreased = true, outcome: if marksIncreased = true then &#34;REVISED&#34; else &#34;UNCHANGED&#34;}" />
+          <zeebe:loopCharacteristics inputCollection="=assignments" inputElement="subject" outputCollection="subjectResults" outputElement="={subjectCode: subject.subjectCode, subjectName: subject.subjectName, department: subject.department, maxMarks: subject.maxMarks, scriptId: subject.scriptId, originalMarks: originalMarks, proposedMarks: revisedMarks, firstExaminerId: subject.firstExaminerId, firstExaminerMarks: firstExaminerMarks, secondExaminerId: subject.secondExaminerId, secondExaminerMarks: secondExaminerMarks, revisedMarks: revisedMarks, markDifference: revisedMarks - originalMarks, marksIncreased: marksIncreased = true, outcome: if marksIncreased = true then &#34;REVISED&#34; else &#34;UNCHANGED&#34;}" />
         </bpmn:extensionElements>
       </bpmn:multiInstanceLoopCharacteristics>
     </bpmn:businessRuleTask>
@@ -320,27 +280,15 @@
 
     <!-- ===================== Moderation and Approval ===================== -->
 
-    <bpmn:userTask id="hodReviewIncrease" name="HOD reviews mark increase">
-      <bpmn:documentation>The Head of the student's department reviews every subject whose marks increased and recommends approving or rejecting each increase (hodReview).</bpmn:documentation>
-      <bpmn:extensionElements>
-        <zeebe:userTask />
-        <zeebe:formDefinition formId="hod-review" />
-        <zeebe:assignmentDefinition candidateGroups="=[&#34;hod-&#34; + lower case(department)]" />
-        <zeebe:taskSchedule dueDate="=now() + duration(config.examinerSla)" />
-      </bpmn:extensionElements>
-      <bpmn:incoming>flowMarksIncreased</bpmn:incoming>
-      <bpmn:outgoing>flowToCoeApproval</bpmn:outgoing>
-    </bpmn:userTask>
-
     <bpmn:userTask id="coeApproveResult" name="CoE approves revised result">
-      <bpmn:documentation>The Controller of Examinations sees the HOD's recommendations and makes the final decision per subject. The backend writes the decision into subjectResults: a rejected increase becomes WITHHELD and keeps the original marks.</bpmn:documentation>
+      <bpmn:documentation>The Controller of Examinations approves or rejects the increase of every subject whose marks went up; the decision is final. The backend writes the decision into subjectResults: a rejected increase becomes WITHHELD and keeps the original marks.</bpmn:documentation>
       <bpmn:extensionElements>
         <zeebe:userTask />
         <zeebe:formDefinition formId="coe-approval" />
         <zeebe:assignmentDefinition candidateGroups="coe" />
         <zeebe:taskSchedule dueDate="=now() + duration(config.examinerSla)" />
       </bpmn:extensionElements>
-      <bpmn:incoming>flowToCoeApproval</bpmn:incoming>
+      <bpmn:incoming>flowMarksIncreased</bpmn:incoming>
       <bpmn:outgoing>flowToIncreaseApprovedGateway</bpmn:outgoing>
     </bpmn:userTask>
 
@@ -418,14 +366,11 @@
     <bpmn:sequenceFlow id="flowExpiredToNotify" sourceRef="paymentWindowExpired" targetRef="notifyPaymentFailed" />
     <bpmn:sequenceFlow id="flowToClosedPaymentFailed" sourceRef="notifyPaymentFailed" targetRef="closedPaymentFailed" />
     <bpmn:sequenceFlow id="flowToExaminerMarks" sourceRef="clerkAssignExaminer" targetRef="examinerSendsMarks" />
-    <bpmn:sequenceFlow id="flowToAssignSecond" sourceRef="examinerSendsMarks" targetRef="clerkAssignSecondExaminer" />
-    <bpmn:sequenceFlow id="flowToReEvaluate" sourceRef="clerkAssignSecondExaminer" targetRef="reEvaluateScript" />
-    <bpmn:sequenceFlow id="flowToCompare" sourceRef="reEvaluateScript" targetRef="evaluateMarksDifference" />
+    <bpmn:sequenceFlow id="flowToCompare" sourceRef="examinerSendsMarks" targetRef="evaluateMarksDifference" />
     <bpmn:sequenceFlow id="flowToMarksGateway" sourceRef="evaluateMarksDifference" targetRef="marksIncreasedGateway" />
-    <bpmn:sequenceFlow id="flowMarksIncreased" name="Yes" sourceRef="marksIncreasedGateway" targetRef="hodReviewIncrease">
+    <bpmn:sequenceFlow id="flowMarksIncreased" name="Yes" sourceRef="marksIncreasedGateway" targetRef="coeApproveResult">
       <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">=some r in subjectResults satisfies r.marksIncreased = true</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
-    <bpmn:sequenceFlow id="flowToCoeApproval" sourceRef="hodReviewIncrease" targetRef="coeApproveResult" />
     <bpmn:sequenceFlow id="flowToIncreaseApprovedGateway" sourceRef="coeApproveResult" targetRef="increaseApprovedGateway" />
     <bpmn:sequenceFlow id="flowIncreaseApproved" name="Yes" sourceRef="increaseApprovedGateway" targetRef="updateOfficialResult">
       <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">=some r in subjectResults satisfies r.marksIncreased = true</bpmn:conditionExpression>
@@ -507,30 +452,21 @@
         <dc:Bounds x="1160" y="490" width="140" height="80" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="examinerSendsMarks_di" bpmnElement="examinerSendsMarks">
-        <dc:Bounds x="1350" y="490" width="130" height="80" />
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="clerkAssignSecondExaminer_di" bpmnElement="clerkAssignSecondExaminer">
-        <dc:Bounds x="1530" y="490" width="130" height="80" />
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="reEvaluateScript_di" bpmnElement="reEvaluateScript">
-        <dc:Bounds x="1710" y="490" width="130" height="80" />
+        <dc:Bounds x="1470" y="490" width="140" height="80" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="evaluateMarksDifference_di" bpmnElement="evaluateMarksDifference">
-        <dc:Bounds x="1890" y="490" width="120" height="80" />
+        <dc:Bounds x="1780" y="490" width="120" height="80" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="marksIncreasedGateway_di" bpmnElement="marksIncreasedGateway" isMarkerVisible="true">
         <dc:Bounds x="2095" y="505" width="50" height="50" />
         <bpmndi:BPMNLabel><dc:Bounds x="2076" y="475" width="88" height="14" /></bpmndi:BPMNLabel>
       </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="hodReviewIncrease_di" bpmnElement="hodReviewIncrease">
+      <bpmndi:BPMNShape id="coeApproveResult_di" bpmnElement="coeApproveResult">
         <dc:Bounds x="2055" y="695" width="130" height="80" />
       </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="coeApproveResult_di" bpmnElement="coeApproveResult">
-        <dc:Bounds x="2245" y="695" width="130" height="80" />
-      </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="increaseApprovedGateway_di" bpmnElement="increaseApprovedGateway" isMarkerVisible="true">
-        <dc:Bounds x="2435" y="710" width="50" height="50" />
-        <bpmndi:BPMNLabel><dc:Bounds x="2415" y="680" width="94" height="14" /></bpmndi:BPMNLabel>
+        <dc:Bounds x="2265" y="710" width="50" height="50" />
+        <bpmndi:BPMNLabel><dc:Bounds x="2243" y="680" width="94" height="14" /></bpmndi:BPMNLabel>
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="updateOfficialResult_di" bpmnElement="updateOfficialResult">
         <dc:Bounds x="2530" y="865" width="130" height="80" />
@@ -604,22 +540,14 @@
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="flowToExaminerMarks_di" bpmnElement="flowToExaminerMarks">
         <di:waypoint x="1300" y="530" />
-        <di:waypoint x="1350" y="530" />
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="flowToAssignSecond_di" bpmnElement="flowToAssignSecond">
-        <di:waypoint x="1480" y="530" />
-        <di:waypoint x="1530" y="530" />
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="flowToReEvaluate_di" bpmnElement="flowToReEvaluate">
-        <di:waypoint x="1660" y="530" />
-        <di:waypoint x="1710" y="530" />
+        <di:waypoint x="1470" y="530" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="flowToCompare_di" bpmnElement="flowToCompare">
-        <di:waypoint x="1840" y="530" />
-        <di:waypoint x="1890" y="530" />
+        <di:waypoint x="1610" y="530" />
+        <di:waypoint x="1780" y="530" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="flowToMarksGateway_di" bpmnElement="flowToMarksGateway">
-        <di:waypoint x="2010" y="530" />
+        <di:waypoint x="1900" y="530" />
         <di:waypoint x="2095" y="530" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="flowMarksIncreased_di" bpmnElement="flowMarksIncreased">
@@ -627,25 +555,21 @@
         <di:waypoint x="2120" y="695" />
         <bpmndi:BPMNLabel><dc:Bounds x="2128" y="610" width="19" height="14" /></bpmndi:BPMNLabel>
       </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="flowToCoeApproval_di" bpmnElement="flowToCoeApproval">
-        <di:waypoint x="2185" y="735" />
-        <di:waypoint x="2245" y="735" />
-      </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="flowToIncreaseApprovedGateway_di" bpmnElement="flowToIncreaseApprovedGateway">
-        <di:waypoint x="2375" y="735" />
-        <di:waypoint x="2435" y="735" />
+        <di:waypoint x="2185" y="735" />
+        <di:waypoint x="2265" y="735" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="flowIncreaseApproved_di" bpmnElement="flowIncreaseApproved">
-        <di:waypoint x="2460" y="760" />
-        <di:waypoint x="2460" y="905" />
+        <di:waypoint x="2290" y="760" />
+        <di:waypoint x="2290" y="905" />
         <di:waypoint x="2530" y="905" />
-        <bpmndi:BPMNLabel><dc:Bounds x="2468" y="800" width="19" height="14" /></bpmndi:BPMNLabel>
+        <bpmndi:BPMNLabel><dc:Bounds x="2298" y="800" width="19" height="14" /></bpmndi:BPMNLabel>
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="flowIncreaseNotApproved_di" bpmnElement="flowIncreaseNotApproved">
-        <di:waypoint x="2485" y="735" />
+        <di:waypoint x="2315" y="735" />
         <di:waypoint x="2770" y="735" />
         <di:waypoint x="2770" y="865" />
-        <bpmndi:BPMNLabel><dc:Bounds x="2590" y="717" width="15" height="14" /></bpmndi:BPMNLabel>
+        <bpmndi:BPMNLabel><dc:Bounds x="2340" y="717" width="15" height="14" /></bpmndi:BPMNLabel>
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="flowMarksNotIncreased_di" bpmnElement="flowMarksNotIncreased">
         <di:waypoint x="2145" y="530" />

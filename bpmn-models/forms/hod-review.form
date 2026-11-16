@@ -1,7 +1,0 @@
-{
-  "executionPlatform": "Camunda Cloud", "executionPlatformVersion": "8.9.0", "exporter": {"name": "Camunda Modeler", "version": "5.46.1"}, "schemaVersion": 18, "type": "default", "id": "hod-review",
-  "components": [
-    { "type": "text", "id": "Text_Header", "text": "=\"### HOD review of mark increases: \" + requestId + \"\n\" + string join(for r in subjectResults[item.marksIncreased = true] return r.subjectCode + \": \" + string(r.originalMarks) + \" -> \" + string(r.revisedMarks), \", \")" },
-    { "type": "textarea", "id": "Field_Decisions", "key": "decisionsJson", "label": "Recommend approving or rejecting each increase", "description": "Use the Revaluation Portal for per-subject decisions", "validate": { "required": true } }
-  ]
-}

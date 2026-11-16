@@ -17,7 +17,6 @@ const ROLE_HINT = {
   STUDENT: 'Submit requests, pay, track progress and results',
   EXAM_CELL: 'Verify applications, assign examiners, update results, process view',
   EXAMINER: 'Re-evaluate assigned answer scripts',
-  MODERATOR: 'HODs review mark increases for their department',
   COE: 'Final approval of revised results',
 };
 
@@ -26,14 +25,14 @@ const GROUPS = [
   ['Student', ['STUDENT'], UserRound],
   ['Exam cell', ['EXAM_CELL'], ClipboardCheck],
   ['Examiners', ['EXAMINER'], ScanSearch],
-  ['Approvers', ['MODERATOR', 'COE'], ShieldCheck],
+  ['Approver', ['COE'], ShieldCheck],
 ];
 
 const STEPS = [
   'Student submits and the exam cell verifies the application',
   'Fee paid securely with Razorpay',
   'Two independent, blind examiners per subject',
-  'HOD and Controller of Examinations approve any increase',
+  'Controller of Examinations approves any increase',
 ];
 
 export default function Login() {
@@ -120,7 +119,7 @@ export default function Login() {
                               <input type="radio" name="user" value={u.username} checked={picked === u.username} onChange={() => setPicked(u.username)} className="h-4 w-4 accent-brand" />
                               <span className="flex min-w-0 flex-1 flex-col">
                                 <span className="text-[15px] font-semibold">{u.displayName}</span>
-                                <span className="text-[13px] text-muted-foreground">{ROLE_LABEL[u.role]} · {u.role === 'MODERATOR' && !(u.groups || []).length ? 'View requests' : ROLE_HINT[u.role]}</span>
+                                <span className="text-[13px] text-muted-foreground">{ROLE_LABEL[u.role]} · {ROLE_HINT[u.role]}</span>
                               </span>
                               <span className="font-mono text-xs text-muted-foreground">{u.username}</span>
                             </label>

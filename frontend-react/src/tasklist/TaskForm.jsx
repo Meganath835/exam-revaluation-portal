@@ -1,5 +1,5 @@
 import {
-  AssignExaminerForm, AssignSecondExaminerForm, ExaminerMarksForm, PayFeeTask, ReEvaluateForm, ReviewIncreaseForm, SubmitRequestTask,
+  AssignExaminerForm, ExaminerMarksForm, PayFeeTask, ReviewIncreaseForm, SubmitRequestTask,
   UpdateResultForm, VerifyApplicationForm,
 } from './forms/simpleForms';
 
@@ -10,9 +10,6 @@ export const TASK_FORMS = {
   completeCheckoutAndVerifyPayment: PayFeeTask,
   clerkAssignExaminer: AssignExaminerForm,
   examinerSendsMarks: ExaminerMarksForm,
-  clerkAssignSecondExaminer: AssignSecondExaminerForm,
-  reEvaluateScript: ReEvaluateForm,
-  hodReviewIncrease: ReviewIncreaseForm,
   coeApproveResult: ReviewIncreaseForm,
   updateOfficialResult: UpdateResultForm,
 };

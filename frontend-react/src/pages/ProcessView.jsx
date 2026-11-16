@@ -19,7 +19,7 @@ const TILES = [
   ['running', 'Running', Activity, 'text-brand bg-brand-soft'],
   ['waitingForExamCell', 'Waiting for exam cell', ClipboardList, 'text-warn bg-warn-soft'],
   ['withExaminers', 'With examiners', ScanSearch, 'text-brand bg-brand-soft'],
-  ['waitingForApproval', 'Waiting for HOD / CoE', ShieldCheck, 'text-warn bg-warn-soft'],
+  ['waitingForApproval', 'Waiting for CoE', ShieldCheck, 'text-warn bg-warn-soft'],
   ['waitingForStudents', 'Waiting for students', UserRound, 'text-foreground/70 bg-muted'],
   ['completed', 'Completed', CheckCircle2, 'text-ok bg-ok-soft'],
   ['closed', 'Closed or rejected', XCircle, 'text-muted-foreground bg-muted'],

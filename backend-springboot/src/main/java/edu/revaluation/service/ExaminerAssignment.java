@@ -10,9 +10,9 @@ import java.util.*;
 import org.springframework.stereotype.Service;
 
 /**
- * Rules for the exam cell's examiner assignments. An independent examiner is from the subject's
- * department and is never the examiner who did the first evaluation (nor, for the second
- * assignment, the first revaluation examiner). The suggestion is the least busy such examiner.
+ * Rules for the exam cell's examiner assignments. Every subject gets two independent examiners:
+ * both from the subject's department, neither the examiner who did the first evaluation, and not
+ * the same person twice. The suggestions are the least busy such examiners.
  */
 @Service
 public class ExaminerAssignment {
@@ -39,9 +39,11 @@ public class ExaminerAssignment {
         .toList();
   }
 
-  public Optional<AppUser> suggest(String subjectCode, String department, Collection<String> alsoExclude) {
-    return independentExaminers(subjectCode, department, alsoExclude).stream()
-        .min(Comparator.comparingLong(u -> subjects.countOpenAssignments(u.getUsername())));
+  /** The independent examiners of a subject, least busy first. */
+  public List<AppUser> suggestions(String subjectCode, String department) {
+    return independentExaminers(subjectCode, department, List.of()).stream()
+        .sorted(Comparator.comparingLong(u -> subjects.countOpenAssignments(u.getUsername())))
+        .toList();
   }
 
   /** Returns an error message when the examiner may not take this subject, otherwise null. */
@@ -51,7 +53,7 @@ public class ExaminerAssignment {
     if (u.isEmpty() || u.get().getRole() != Role.EXAMINER) return examinerId + " is not an examiner.";
     if (!Objects.equals(u.get().getDepartment(), department)) return examinerId + " is not from the " + department + " department.";
     if (examinerId.equals(firstEvaluator(subjectCode))) return examinerId + " did the first evaluation, so is not independent.";
-    if (alsoExclude.contains(examinerId)) return examinerId + " already revalued this script; choose a different examiner.";
+    if (alsoExclude.contains(examinerId)) return examinerId + " is already the other examiner of this script; choose two different examiners.";
     return null;
   }
 

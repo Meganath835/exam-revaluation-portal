@@ -49,22 +49,23 @@ class ExaminerAssignmentTest {
   }
 
   @Test
-  void neverOffersTheFirstEvaluatorOrTheFirstRevaluationExaminer() {
+  void neverOffersTheFirstEvaluatorOrAnExcludedExaminer() {
     assertThat(assignment.independentExaminers("CS305", "CSE", List.of("examiner.cs01")))
         .extracting(AppUser::getUsername).containsExactly("examiner.cs03");
   }
 
   @Test
-  void suggestsTheLeastBusyIndependentExaminer() {
+  void suggestsTheIndependentExaminersLeastBusyFirst() {
     when(subjects.countOpenAssignments("examiner.cs01")).thenReturn(4L);
     when(subjects.countOpenAssignments("examiner.cs03")).thenReturn(1L);
-    assertThat(assignment.suggest("CS305", "CSE", List.of())).map(AppUser::getUsername).contains("examiner.cs03");
+    assertThat(assignment.suggestions("CS305", "CSE")).extracting(AppUser::getUsername)
+        .containsExactly("examiner.cs03", "examiner.cs01");
   }
 
   @Test
   void rejectsAssignmentsThatAreNotIndependent() {
     assertThat(assignment.problemWith("examiner.cs02", "CS305", "CSE", List.of())).contains("first evaluation");
-    assertThat(assignment.problemWith("examiner.cs01", "CS305", "CSE", List.of("examiner.cs01"))).contains("already revalued");
+    assertThat(assignment.problemWith("examiner.cs01", "CS305", "CSE", List.of("examiner.cs01"))).contains("two different examiners");
     assertThat(assignment.problemWith("examiner.ec01", "CS305", "CSE", List.of())).contains("department");
     assertThat(assignment.problemWith("21CS042", "CS305", "CSE", List.of())).contains("not an examiner");
     assertThat(assignment.problemWith("", "CS305", "CSE", List.of())).isNotNull();

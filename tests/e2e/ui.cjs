@@ -38,9 +38,9 @@ const assert = (ok, msg) => { if (!ok) throw new Error('ASSERTION: ' + msg); };
     if (group) await page.getByRole('tab', { name: /Group tasks/ }).click();
     await page.getByRole('button', { name: new RegExp(`${name}[\\s\\S]*${rid}${code ? ` · ${code}` : ''}`) }).click({ timeout: 30000 });
   };
-  const findAssignee = async (rid, element, code) => {
+  const findAssignee = async (rid, element, code, exclude = []) => {
     for (let i = 0; i < 30; i++) {
-      for (const ex of ['examiner.cs01', 'examiner.cs02', 'examiner.cs03']) {
+      for (const ex of ['examiner.cs01', 'examiner.cs02', 'examiner.cs03'].filter((x) => !exclude.includes(x))) {
         const ts = await (await page.request.get(BASE + '/api/tasks?view=mine', { headers: { 'X-User': ex } })).json();
         if (ts.some((t) => t.elementId === element && t.requestId === rid && t.subjectCode === code)) return ex;
       }
@@ -113,55 +113,38 @@ const assert = (ok, msg) => { if (!ok) throw new Error('ASSERTION: ' + msg); };
   await shot('05-clerk-process-view');
   step('clerk: Process view shows the deployed model and ' + rid);
 
-  // 5. Examination and Revaluation lane, one step at a time for every subject
+  // 5. Examination and Revaluation lane: two examiners per subject, assigned together, evaluating in parallel
   for (const [code] of SUBJECTS) {
-    await openTask('Clerk assigns independent examiner', rid, code, true);
-    if (code === 'CS301') await shot('06-clerk-assign-examiner');
-    await page.getByRole('button', { name: 'Assign examiner' }).click();
-    await page.getByText('Examiner assigned').waitFor();
+    await openTask('Clerk assigns independent examiners', rid, code, true);
+    if (code === 'CS301') await shot('06-clerk-assign-examiners');
+    await page.getByRole('button', { name: 'Assign examiners' }).click();
+    await page.getByText('Examiners assigned').waitFor();
   }
-  step('first examiners assigned');
-  for (const [code, m1] of SUBJECTS) {
-    await as(await findAssignee(rid, 'examinerSendsMarks', code));
-    await openTask('Examiner sends updated marks to clerk', rid, code);
-    await page.getByRole('spinbutton', { name: 'Updated marks' }).fill(m1);
-    await page.getByRole('textbox', { name: 'Remarks for the exam cell' }).fill('Rechecked every answer.');
-    if (code === 'CS301') await shot('07-examiner-blind');
-    await page.getByRole('button', { name: 'Send marks to the exam cell' }).click();
-    await page.getByText('Marks sent to the exam cell').waitFor();
+  step('two examiners assigned per subject');
+  for (const [code, ...marks] of SUBJECTS) {
+    const done = [];
+    for (const m of marks) {
+      const examiner = await findAssignee(rid, 'examinerSendsMarks', code, done);
+      done.push(examiner);
+      await as(examiner);
+      await openTask('Examiner sends updated marks to clerk', rid, code);
+      await page.getByRole('spinbutton', { name: 'Updated marks' }).fill(m);
+      await page.getByRole('textbox', { name: 'Remarks for the exam cell' }).fill('Rechecked every answer.');
+      if (code === 'CS301' && done.length === 1) await shot('07-examiner-blind');
+      await page.getByRole('button', { name: 'Send marks to the exam cell' }).click();
+      await page.getByText('Marks sent to the exam cell').waitFor();
+    }
   }
-  step('first evaluations sent');
-  await as('examcell.clerk');
-  for (const [code] of SUBJECTS) {
-    await openTask('Clerk assigns second independent examiner', rid, code, true);
-    await page.getByRole('button', { name: 'Assign second examiner' }).click();
-    await page.getByText('Second examiner assigned').waitFor();
-  }
-  step('second examiners assigned');
-  for (const [code, , m2] of SUBJECTS) {
-    await as(await findAssignee(rid, 'reEvaluateScript', code));
-    await openTask('Re-evaluate answer script', rid, code);
-    await page.getByRole('spinbutton', { name: 'Your marks' }).fill(m2);
-    await page.getByRole('textbox', { name: 'Remarks for the exam cell' }).fill('Second evaluation done.');
-    await page.getByRole('button', { name: 'Submit evaluation' }).click();
-    await page.getByText('Evaluation submitted').waitFor();
-  }
-  step('second evaluations submitted');
+  step('both examiners of every subject sent their marks');
 
-  // 6. Marks increased? yes -> HOD recommends, CoE approves
-  await as('hod.cse');
-  await openTask('HOD reviews mark increase', rid, null, true);
-  await page.getByLabel('Approve the increase').check();
-  await shot('08-hod-review');
-  await page.getByRole('button', { name: 'Send recommendation' }).click();
-  await page.getByText('Recommendation sent to the CoE').waitFor();
+  // 6. Marks increased? yes -> the CoE approves
   await as('coe');
   await openTask('CoE approves revised result', rid, null, true);
-  await page.getByText(/HOD recommends/).waitFor();
   await page.getByLabel('Approve the increase').check();
+  await shot('08-coe-approval');
   await page.getByRole('button', { name: 'Record final decision' }).click();
   await page.getByText('Final decision recorded').waitFor();
-  step('HOD recommended, CoE approved');
+  step('CoE approved');
 
   // 7. Increase approved? yes -> exam cell updates the official result
   await as('examcell.clerk');

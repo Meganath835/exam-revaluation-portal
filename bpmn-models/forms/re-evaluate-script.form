@@ -1,8 +1,0 @@
-{
-  "executionPlatform": "Camunda Cloud", "executionPlatformVersion": "8.9.0", "exporter": {"name": "Camunda Modeler", "version": "5.46.1"}, "schemaVersion": 18, "type": "default", "id": "re-evaluate-script",
-  "components": [
-    { "type": "text", "id": "Text_Header", "text": "=\"### \" + subject.subjectCode + \" \" + subject.subjectName + \"\nScript \" + subject.scriptId + \". Marks are out of \" + string(subject.maxMarks) + \".\"" },
-    { "type": "number", "id": "Field_SecondExaminerMarks", "key": "secondExaminerMarks", "label": "Your marks", "validate": { "required": true, "min": 0, "max": 100 } },
-    { "type": "textarea", "id": "Field_ExaminerRemarks", "key": "examinerRemarks", "label": "Remarks for the exam cell", "validate": { "required": true } }
-  ]
-}

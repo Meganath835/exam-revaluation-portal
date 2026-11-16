@@ -33,10 +33,7 @@ public class StatusService {
       Map.entry(CHECKOUT, RequestStatus.AWAITING_PAYMENT),
       Map.entry(ASSIGN_EXAMINER, RequestStatus.UNDER_REVALUATION),
       Map.entry(EXAMINER_MARKS, RequestStatus.UNDER_REVALUATION),
-      Map.entry(ASSIGN_SECOND_EXAMINER, RequestStatus.UNDER_REVALUATION),
-      Map.entry(RE_EVALUATE, RequestStatus.UNDER_REVALUATION),
       Map.entry(EVALUATE_MARKS, RequestStatus.UNDER_REVALUATION),
-      Map.entry(HOD_REVIEW, RequestStatus.AWAITING_APPROVAL),
       Map.entry(COE_APPROVAL, RequestStatus.AWAITING_APPROVAL),
       Map.entry(UPDATE_RESULT, RequestStatus.RESULTS_READY),
       Map.entry(NOTIFY_RESULT, RequestStatus.RESULTS_READY));
@@ -124,14 +121,14 @@ public class StatusService {
         : stage("eligible", "Eligible", elements, EVALUATE_ELIGIBILITY));
     out.add(present(elements, ASSIGN_EXAMINER) ? done("paid", "Paid", start(elements, ASSIGN_EXAMINER))
         : stage("paid", "Paid", elements, CREATE_ORDER, CHECKOUT));
-    out.add(completed(elements, RE_EVALUATE) && !active(elements, EXAMINATION.toArray(String[]::new))
-        ? done("revaluation", "Revaluation", end(elements, RE_EVALUATE))
+    out.add(completed(elements, EXAMINER_MARKS) && !active(elements, EXAMINATION.toArray(String[]::new))
+        ? done("revaluation", "Revaluation", end(elements, EXAMINER_MARKS))
         : stage("revaluation", "Revaluation", elements, EXAMINATION.toArray(String[]::new)));
     out.add(stage("compared", "Marks compared", elements, EVALUATE_MARKS));
-    // HOD and CoE approval only happens when marks increased; otherwise the stage is skipped.
-    Stage approval = stage("approved", "HOD and CoE approval", elements, HOD_REVIEW, COE_APPROVAL);
+    // CoE approval only happens when marks increased; otherwise the stage is skipped.
+    Stage approval = stage("approved", "CoE approval", elements, COE_APPROVAL);
     if (approval.state().equals("pending") && (present(elements, NOTIFY_RESULT) || completed(elements, REQUEST_COMPLETED))) {
-      approval = new Stage("approved", "HOD and CoE approval", "skipped", null);
+      approval = new Stage("approved", "CoE approval", "skipped", null);
     }
     out.add(approval);
     out.add(completed(elements, REQUEST_COMPLETED) ? done("published", "Result published", end(elements, REQUEST_COMPLETED))

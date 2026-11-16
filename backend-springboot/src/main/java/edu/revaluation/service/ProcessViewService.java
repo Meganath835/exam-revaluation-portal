@@ -62,8 +62,7 @@ public class ProcessViewService {
     Map<String, Long> totals = new LinkedHashMap<>();
     totals.put("running", rows.stream().filter(x -> !RequestStatus.valueOf(x.status()).isTerminal()).count());
     totals.put("waitingForExamCell", open.stream().filter(t -> t.getCandidateGroups() != null && t.getCandidateGroups().contains("exam-cell")).count());
-    totals.put("waitingForApproval", open.stream().filter(t -> ProcessElements.HOD_REVIEW.equals(t.getElementId())
-        || ProcessElements.COE_APPROVAL.equals(t.getElementId())).count());
+    totals.put("waitingForApproval", open.stream().filter(t -> ProcessElements.COE_APPROVAL.equals(t.getElementId())).count());
     totals.put("withExaminers", open.stream().filter(t -> ProcessElements.EXAMINER_TASKS.contains(t.getElementId())).count());
     totals.put("waitingForStudents", open.stream().filter(t -> ProcessElements.SUBMIT_REQUEST.equals(t.getElementId())
         || ProcessElements.CHECKOUT.equals(t.getElementId())).count());

@@ -24,6 +24,7 @@ public class RequestSubject {
   private Integer revisedMarks;
   private String outcome;
   private String examinerId;
+  private String secondExaminerId;
   private String scriptId;
 
   /** Short, human-readable stage shown in the status tracker. */
@@ -54,6 +55,8 @@ public class RequestSubject {
   public void setOutcome(String outcome) { this.outcome = outcome; }
   public String getExaminerId() { return examinerId; }
   public void setExaminerId(String examinerId) { this.examinerId = examinerId; }
+  public String getSecondExaminerId() { return secondExaminerId; }
+  public void setSecondExaminerId(String secondExaminerId) { this.secondExaminerId = secondExaminerId; }
   public String getScriptId() { return scriptId; }
   public void setScriptId(String scriptId) { this.scriptId = scriptId; }
   public String getStage() { return stage; }

@@ -50,10 +50,7 @@ class BpmnModelTest {
         .containsEntry("completeCheckoutAndVerifyPayment", "Payment Processing")
         .containsEntry("clerkAssignExaminer", "Examination and Revaluation")
         .containsEntry("examinerSendsMarks", "Examination and Revaluation")
-        .containsEntry("clerkAssignSecondExaminer", "Examination and Revaluation")
-        .containsEntry("reEvaluateScript", "Examination and Revaluation")
         .containsEntry("evaluateMarksDifference", "Examination and Revaluation")
-        .containsEntry("hodReviewIncrease", "Moderation and Approval")
         .containsEntry("coeApproveResult", "Moderation and Approval")
         .containsEntry("increaseApprovedGateway", "Moderation and Approval")
         .containsEntry("updateOfficialResult", "Result Publication")
@@ -68,9 +65,28 @@ class BpmnModelTest {
     assertThat(path(model, "requestStarted", "eligibleGateway", "paymentGateway", "marksIncreasedGateway", "increaseApprovedGateway"))
         .containsExactly("requestStarted", "submitRevaluationRequest", "verifyApplication", "evaluateEligibility", "eligibleGateway",
             "createRazorpayOrder", "completeCheckoutAndVerifyPayment", "paymentGateway", "clerkAssignExaminer",
-            "examinerSendsMarks", "clerkAssignSecondExaminer", "reEvaluateScript", "evaluateMarksDifference",
-            "marksIncreasedGateway", "hodReviewIncrease", "coeApproveResult", "increaseApprovedGateway", "updateOfficialResult",
+            "examinerSendsMarks", "evaluateMarksDifference",
+            "marksIncreasedGateway", "coeApproveResult", "increaseApprovedGateway", "updateOfficialResult",
             "notifyResultPublished", "requestCompleted");
+  }
+
+  @Test
+  void examinationRunsAsParallelMultiInstanceAndNoHodStepIsLeft() {
+    BpmnModelInstance model = main();
+    for (String id : List.of("clerkAssignExaminer", "examinerSendsMarks", "evaluateMarksDifference")) {
+      Activity task = model.getModelElementById(id);
+      assertThat(task.getLoopCharacteristics()).as("multi-instance of " + id).isInstanceOf(MultiInstanceLoopCharacteristics.class);
+      assertThat(((MultiInstanceLoopCharacteristics) task.getLoopCharacteristics()).isSequential()).as("parallel " + id).isFalse();
+    }
+    // Both examiners of a subject evaluate at the same time: one user task, one instance per subject and examiner.
+    Activity marks = model.getModelElementById("examinerSendsMarks");
+    var loop = marks.getLoopCharacteristics().getSingleExtensionElement(io.camunda.zeebe.model.bpmn.instance.zeebe.ZeebeLoopCharacteristics.class);
+    assertThat(loop.getInputCollection()).contains("for s in assignments, n in [1, 2]");
+    assertThat(model.getModelElementsByType(UserTask.class)).extracting(UserTask::getId)
+        .doesNotContain("clerkAssignSecondExaminer", "reEvaluateScript", "hodReviewIncrease");
+    for (BaseElement e : model.getModelElementsByType(BaseElement.class)) {
+      if (e.getId() != null) assertThat(e.getId().toLowerCase()).as(e.getId()).doesNotContain("hod");
+    }
   }
 
   @Test

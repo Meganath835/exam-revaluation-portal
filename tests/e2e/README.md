@@ -4,7 +4,7 @@ Run against a running stack (`docker compose --profile camunda up`) with `RAZORP
 payment window (`PAYMENT_WINDOW=PT1M` in `.env`, used by T3 and T7).
 
 ```bash
-python3 t1_happy.py        # T1: two subjects, two examiners each, one increase, official result, result email
+python3 t1_happy.py        # T1: two subjects, two parallel examiners each, one increase, CoE approval, official result, result email
 python3 t_exceptions.py    # T2-T8: window closed, duplicate, forged payment, payment timeout, missing script,
                            #        examiner independence, no increase
 python3 t_rbac.py          # Process View: exam cell only, checked on the API (403/401 for everyone else)

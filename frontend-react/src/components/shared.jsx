@@ -12,7 +12,7 @@ export const STATUS = {
   AWAITING_VERIFICATION: { label: 'Being verified', cls: 'border-transparent bg-secondary text-secondary-foreground' },
   AWAITING_PAYMENT: { label: 'Payment due', cls: 'border-transparent bg-warn-soft text-warn' },
   UNDER_REVALUATION: { label: 'Under revaluation', cls: 'border-transparent bg-brand-soft text-brand' },
-  AWAITING_APPROVAL: { label: 'Awaiting HOD and CoE approval', cls: 'border-transparent bg-warn-soft text-warn' },
+  AWAITING_APPROVAL: { label: 'Awaiting CoE approval', cls: 'border-transparent bg-warn-soft text-warn' },
   RESULTS_READY: { label: 'Results being published', cls: 'border-transparent bg-brand-soft text-brand' },
   COMPLETED: { label: 'Completed', cls: 'border-transparent bg-ok-soft text-ok' },
   REJECTED: { label: 'Not accepted', cls: 'border-transparent bg-pen-soft text-pen' },

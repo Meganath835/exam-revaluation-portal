@@ -17,7 +17,7 @@ import { BlurFade } from '@/components/magicui/blur-fade';
 import { cn } from '@/lib/utils';
 
 /** Blind evaluation: examiners don't get a link to the request (it would show the student). */
-const EXAMINER_TASKS = ['examinerSendsMarks', 'reEvaluateScript'];
+const EXAMINER_TASKS = ['examinerSendsMarks'];
 
 const TABS = [
   ['mine', 'My tasks', UserCheck],

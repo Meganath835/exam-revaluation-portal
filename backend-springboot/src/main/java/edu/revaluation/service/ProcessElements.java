@@ -19,15 +19,13 @@ public final class ProcessElements {
   public static final String NOTIFY_PAYMENT_FAILED = "notifyPaymentFailed";
   public static final String CLOSED_PAYMENT_FAILED = "closedPaymentFailed";
 
-  // Examination and Revaluation (each runs once per subject)
+  // Examination and Revaluation: the clerk's task and the marks comparison run once per subject,
+  // the examiner's task once per subject and examiner (both examiners work at the same time).
   public static final String ASSIGN_EXAMINER = "clerkAssignExaminer";
   public static final String EXAMINER_MARKS = "examinerSendsMarks";
-  public static final String ASSIGN_SECOND_EXAMINER = "clerkAssignSecondExaminer";
-  public static final String RE_EVALUATE = "reEvaluateScript";
   public static final String EVALUATE_MARKS = "evaluateMarksDifference";
 
   // Moderation and Approval (only when marks increased)
-  public static final String HOD_REVIEW = "hodReviewIncrease";
   public static final String COE_APPROVAL = "coeApproveResult";
 
   public static final String UPDATE_RESULT = "updateOfficialResult";
@@ -36,8 +34,8 @@ public final class ProcessElements {
   public static final String NOTIFY_RESULT = "notifyResultPublished";
   public static final String REQUEST_COMPLETED = "requestCompleted";
 
-  public static final List<String> EXAMINATION = List.of(ASSIGN_EXAMINER, EXAMINER_MARKS, ASSIGN_SECOND_EXAMINER, RE_EVALUATE);
+  public static final List<String> EXAMINATION = List.of(ASSIGN_EXAMINER, EXAMINER_MARKS);
 
-  /** Tasks done by an examiner: blind evaluation, the student's identity and earlier marks are hidden. */
-  public static final List<String> EXAMINER_TASKS = List.of(EXAMINER_MARKS, RE_EVALUATE);
+  /** Tasks done by an examiner: blind evaluation, the student's identity, the original marks and the other examiner are hidden. */
+  public static final List<String> EXAMINER_TASKS = List.of(EXAMINER_MARKS);
 }

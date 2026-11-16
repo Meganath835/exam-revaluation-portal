@@ -25,7 +25,7 @@ const NEXT_STEPS = [
   'The exam cell verifies your application; then the eligibility rules are checked.',
   'You pay within the payment window.',
   'Two independent examiners revalue each subject.',
-  'Any increase is reviewed by your HOD and approved by the Controller of Examinations.',
+  'Any increase is approved by the Controller of Examinations.',
   'You get the result by email; the status page updates live.',
 ];
 

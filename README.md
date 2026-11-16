@@ -5,8 +5,8 @@ A full-stack workflow automation application for university **answer-script reva
 
 A student asks for revaluation of one or more subjects; the exam cell verifies the application, and once it is
 accepted and eligible the student pays the fee online. The exam cell assigns two
-independent examiners to each script, the marks are compared by a decision table, any increase is reviewed by
-the Head of Department and approved by the Controller of Examinations before it enters the official result, and the student gets the result by email. The exam cell monitors every request in a live
+independent examiners to each script, who evaluate it at the same time; the marks are compared by a decision table, any increase is
+approved by the Controller of Examinations before it enters the official result, and the student gets the result by email. The exam cell monitors every request in a live
 **Process View**.
 
 ![Main process](docs/images/revaluation-process.png)
@@ -46,19 +46,15 @@ students have no idea where their request stands.
 | Payment Processing | Create Razorpay test order | REST connector | Outbound connector |
 | | Complete Checkout and Verify Payment | Student + server-side signature check | User task + **timer boundary** (payment window) + gateway |
 | | Notify Payment Failure | Email connector | Outbound connector |
-| Examination and Revaluation | Clerk assigns independent examiner | Exam cell | User task, **parallel multi-instance** per subject |
-| | Examiner sends updated marks to clerk | First examiner, blind | User task, parallel multi-instance |
-| | Clerk assigns second independent examiner | Exam cell | User task, parallel multi-instance |
-| | Re-evaluate answer script | Second examiner, blind | User task, parallel multi-instance |
-| | Evaluate Marks Difference | `marksComparisonDecision` DMN | Business rule task, parallel multi-instance + gateway |
-| Moderation and Approval | HOD reviews mark increase (only if marks increased) | HOD of the student's department (group `hod-<dept>`) | User task + gateway |
-| | CoE approves revised result | Controller of Examinations (group `coe`) | User task, final decision per subject |
+| Examination and Revaluation | Clerk assigns independent examiners (two per subject) | Exam cell | User task, **parallel multi-instance** per subject |
+| | Examiner sends updated marks to clerk | Both examiners at the same time, blind | User task, **parallel multi-instance** per subject and examiner |
+| | Evaluate Marks Difference (average of both examiners vs original) | `marksComparisonDecision` DMN | Business rule task, parallel multi-instance per subject + gateway |
+| Moderation and Approval | CoE approves revised result (only if marks increased) | Controller of Examinations (group `coe`) | User task, final decision per subject |
 | | Increase approved? | — | Gateway: Yes → update result, No → publish with original marks |
 | Result Publication | Update official result (only if an increase was approved) | Exam cell | User task |
 | | Notify: Revaluation Result Published | Email connector + `consolidate-results` listener | Outbound connector + execution listener |
 
-**Roles in the demo:** student, exam cell clerk, examiner, Head of Department (HOD) and Controller of
-Examinations (CoE). `dean.academics` can sign in and view requests but has no workflow task.
+**Roles in the demo:** student, exam cell clerk, examiner and Controller of Examinations (CoE).
 
 ## 2. Technology stack
 
@@ -168,9 +164,7 @@ cd frontend-react && npm install && npm run dev      # http://localhost:5173
 | `21CS042` | Student |
 | `examcell.clerk` | Exam cell clerk (group `exam-cell`): verifies applications, assigns examiners, updates results; the only role with the Process View |
 | `examiner.cs01` … `examiner.cs03` | Examiners (CSE) |
-| `hod.cse`, `hod.ece` | Heads of Department (groups `hod-cse`, `hod-ece`): review mark increases of their department |
 | `coe` | Controller of Examinations (group `coe`): final approval of mark increases |
-| `dean.academics` | View requests only |
 
 Exam session `MAY-2026` is inside the 15-day window; `DEC-2025` is closed (shows a DMN rejection).
 Subject `CS399` has no scanned script, so the clerk must enter the physical script's ID.
@@ -182,24 +176,25 @@ Subject `CS399` has no scanned script, so the clerk must enter the physical scri
 | `bpmn-models/main/revaluation-process.bpmn` | `revaluationProcess` | The whole workflow: one pool, five lanes |
 | `bpmn-models/decisions/eligibility-decision.dmn` | `eligibilityDecision` | Window + completeness → eligible, reason |
 | `bpmn-models/decisions/marks-comparison.dmn` | `marksComparisonDecision` | Revised vs original → marksIncreased |
-| `bpmn-models/forms/*.form` | 9 Camunda Forms | Fallback for Camunda Tasklist; the React app has its own forms |
+| `bpmn-models/forms/*.form` | 6 Camunda Forms | Fallback for Camunda Tasklist; the React app has its own forms |
 
 ### Constructs
 
 | Construct | Where |
 |---|---|
 | Collaboration with lanes | `Request and Eligibility`, `Payment Processing`, `Examination and Revaluation`, `Moderation and Approval`, `Result Publication` |
-| Parallel multi-instance (one per subject) | `clerkAssignExaminer`, `examinerSendsMarks`, `clerkAssignSecondExaminer`, `reEvaluateScript`, `evaluateMarksDifference` |
+| Parallel multi-instance (one per subject) | `clerkAssignExaminer`, `evaluateMarksDifference` |
+| Parallel multi-instance (one per subject and examiner) | `examinerSendsMarks` |
 | Timer boundary (interrupting) | `paymentWindowExpired` on `completeCheckoutAndVerifyPayment` → *Notify Payment Failure* |
 | Gateways (all with a default flow) | `eligibleGateway`, `paymentGateway`, `marksIncreasedGateway`, `increaseApprovedGateway` |
-| Expression-based candidate group | `hodReviewIncrease`: `=["hod-" + lower case(department)]` |
 | REST connector | `createRazorpayOrder` |
 | Email connector | `notifyRejected`, `notifyPaymentFailed`, `notifyResultPublished` |
 | Business rule tasks | `evaluateEligibility`, `evaluateMarksDifference` |
 | Execution listener | `consolidate-results` (start) on `notifyResultPublished` |
 
-Each examination step runs once per subject in parallel; the next step starts when every subject has finished
-the current one. The *Notify* tasks are email connectors (the reference diagram draws them as user tasks;
+The clerk's task runs once per subject in parallel. *Examiner sends updated marks to clerk* then runs once per
+subject **and** examiner, all in parallel, so both examiners of a script work at the same time; it starts when the
+clerk has assigned the examiners of every subject, and the marks are compared when every examiner has answered. The *Notify* tasks are email connectors (the reference diagram draws them as user tasks;
 sending real emails keeps the existing integration).
 
 ### Business rules
@@ -207,13 +202,12 @@ sending real emails keeps the existing integration).
 | Rule | Where it is enforced |
 |---|---|
 | One open request per student and exam session | `RequestService.create` (409 before the process starts) |
-| Independent examiner: same department, never the first evaluator | `ExaminerAssignment`, checked when the clerk completes the task |
-| Second examiner is neither the first evaluator nor the first examiner | `ExaminerAssignment` |
-| Blind evaluation: examiners don't see the student, the original marks or the other examiner's marks | `TaskService` strips them from the task context |
-| Final revised marks = average of both examiners, rounded half up | `TaskService` on *Re-evaluate answer script* |
+| Two independent examiners per subject: same department, never the first evaluator, two different people | `ExaminerAssignment`, checked when the clerk completes the task |
+| Blind evaluation: examiners don't see the student, the original marks, the other examiner or the other examiner's marks | `TaskService` strips them from the task context; each examiner only has their own task |
+| Final revised marks = average of both examiners, rounded half up | FEEL input mapping on *Evaluate Marks Difference* |
 | Missing scanned script: the clerk must enter the physical script's ID | `TaskService` on *Clerk assigns independent examiner* |
-| A request covers one department, so it has one HOD | `RequestService.create` rejects subjects from another department |
-| HOD and CoE decide per increased subject; a rejection needs a reason | `TaskService` on *HOD reviews mark increase* / *CoE approves revised result* |
+| A request covers one department | `RequestService.create` rejects subjects from another department |
+| The CoE decides per increased subject; a rejection needs a reason | `TaskService` on *CoE approves revised result* |
 | The CoE's decision is final: a rejected increase is `WITHHELD` and the original marks stand | `TaskService` rewrites `subjectResults` on *CoE approves revised result* |
 
 ### Failure handling
@@ -245,21 +239,21 @@ sending real emails keeps the existing integration).
 | Submit / Complete Checkout | assignee | `=studentId` |
 | Payment window expired | timer duration / output | `=config.paymentWindow` / `=true` → `paymentExpired` |
 | Payment successful? | Yes condition | `=paymentSuccessful = true` |
-| Clerk assigns independent examiner | multi-instance | input `=subjects`, element `subject`, output `firstAssignments` ← `=context put(context put(subject, "firstExaminerId", firstExaminerId), "scriptId", scriptId)` |
-| Examiner sends updated marks | assignee / due date | `=subject.firstExaminerId` / `=now() + duration(config.examinerSla)` |
-| Examiner sends updated marks | multi-instance | input `=firstAssignments`, output `firstEvaluations` ← subject + `firstExaminerMarks`, `firstExaminerRemarks` |
-| Clerk assigns second examiner | multi-instance | input `=firstEvaluations`, output `secondAssignments` ← subject + `secondExaminerId` |
-| Re-evaluate answer script | assignee | `=subject.secondExaminerId` |
-| Re-evaluate answer script | multi-instance | input `=secondAssignments`, output `evaluations` ← subject + `secondExaminerMarks`, `examinerRemarks`, `revisedMarks` |
-| Evaluate Marks Difference | inputs | `=subject.originalMarks` → `originalMarks`, `=subject.revisedMarks` → `revisedMarks` |
+| Clerk assigns independent examiners | multi-instance | input `=subjects`, element `subject`, output `assignments` ← `=context put(context put(context put(subject, "firstExaminerId", firstExaminerId), "secondExaminerId", secondExaminerId), "scriptId", scriptId)` |
+| Examiner sends updated marks | multi-instance input (one element per subject and examiner) | `=for s in assignments, n in [1, 2] return context put(context put(s, "examinerNo", n), "examinerId", if n = 1 then s.firstExaminerId else s.secondExaminerId)`, element `subject` |
+| Examiner sends updated marks | assignee / due date | `=subject.examinerId` / `=now() + duration(config.examinerSla)` |
+| Examiner sends updated marks | multi-instance output | `evaluations` ← `={subjectCode: subject.subjectCode, examinerNo: subject.examinerNo, examinerId: subject.examinerId, marks: examinerMarks, remarks: examinerRemarks}` |
+| Evaluate Marks Difference | multi-instance input | `=assignments`, element `subject` |
+| Evaluate Marks Difference | inputs | `=subject.originalMarks` → `originalMarks`; `=evaluations[item.subjectCode = subject.subjectCode and item.examinerNo = 1][1].marks` → `firstExaminerMarks` (and `examinerNo = 2` → `secondExaminerMarks`) |
+| Evaluate Marks Difference | input → `revisedMarks` (average, rounded half up) | `=floor((sum(evaluations[item.subjectCode = subject.subjectCode].marks) + 1) / 2)` |
 | Evaluate Marks Difference | multi-instance output | `subjectResults` ← `{subjectCode, originalMarks, firstExaminerMarks, secondExaminerMarks, revisedMarks, markDifference, marksIncreased, outcome: if marksIncreased = true then "REVISED" else "UNCHANGED", …}` |
 | Marks increased? | Yes condition | `=some r in subjectResults satisfies r.marksIncreased = true` |
-| HOD reviews mark increase | candidate groups | `=["hod-" + lower case(department)]` |
 | Increase approved? | Yes condition | `=some r in subjectResults satisfies r.marksIncreased = true` (after the CoE's decision) |
 | Result email | body (excerpt) | `=string join(for r in subjectResults return r.subjectCode + ": " + string(r.originalMarks) + " -> " + string(r.revisedMarks) + …, "\n")` |
 
 Each multi-instance task declares its own outputs as local `=null` input mappings (for example
-`firstExaminerId`, `scriptId`), so parallel subjects never overwrite each other.
+`firstExaminerId`, `secondExaminerId`, `scriptId`, or `examinerMarks`, `examinerRemarks`), so parallel
+instances never overwrite each other.
 
 DMN input entries: `true`, `false`, `-` (any), `> originalMarks`, `<= originalMarks`.
 
@@ -294,19 +288,18 @@ Money is in paise (`50000` = ₹500), the unit Razorpay uses.
 | Submit revaluation request | `declarationAccepted` |
 | Exam cell verifies application | `applicationComplete`, `verificationRemarks` (required on reject), `verifiedBy` |
 | Complete Checkout and Verify Payment | `razorpayOrderId`, `razorpayPaymentId`, `paymentSuccessful`, `paidAt` or `paymentFailureReason` |
-| Clerk assigns independent examiner | `firstExaminerId`, `scriptId` |
-| Examiner sends updated marks to clerk | `firstExaminerMarks`, `firstExaminerRemarks` |
-| Clerk assigns second independent examiner | `secondExaminerId` |
-| Re-evaluate answer script | `secondExaminerMarks`, `examinerRemarks`, `revisedMarks` (computed) |
-| HOD reviews mark increase | `decisions: [{subjectCode, approve, remarks}]` → `hodReview` |
+| Clerk assigns independent examiners | `firstExaminerId`, `secondExaminerId`, `scriptId` |
+| Examiner sends updated marks to clerk (once per examiner) | `examinerMarks`, `examinerRemarks` |
 | CoE approves revised result | `decisions: [{subjectCode, approve, remarks}]` → updated `subjectResults`, `coeReviewedBy` |
 | Update official result | `resultUpdated`, `resultReference` |
 
 ### Scoping rules
 
-* **One record per subject travels through the lane.** Each examination multi-instance reads the previous
-  step's output collection and adds its own fields to `subject` with `context put`, so the clerk and the
-  examiners always see the subject they are working on.
+* **One record per subject travels through the lane.** The clerk's multi-instance adds both examiners and the
+  script id to `subject` with `context put` (`assignments`). The examiners' multi-instance turns every
+  assignment into two elements, one per examiner (`examinerNo`, `examinerId`), so each examiner sees the subject
+  they are working on, and collects `{subjectCode, examinerNo, marks, remarks}` into `evaluations`.
+  *Evaluate Marks Difference* joins `assignments` and `evaluations` by subject code.
 * **Parallel multi-instance output.** A task's outputs are first created as local `null`s (input mapping), so
   each parallel instance has its own copy; the output element collects them without races.
 * **Timers are data.** Durations come from `config`, so the same model runs with days in production and
@@ -384,7 +377,7 @@ which also proxies `/api` so the browser sees a single origin).
 
 | Level | Command | Covers |
 |---|---|---|
-| Unit | `cd backend-springboot && mvn test` | BPMN model wiring and lanes, no refund left, checkout verification, examiner independence, signature check, mark averaging |
+| Unit | `cd backend-springboot && mvn test` | BPMN model wiring and lanes, parallel multi-instance examination, no HOD step or refund left, checkout verification, examiner independence, signature check |
 | End to end (API) | `python3 tests/e2e/t1_happy.py`, `python3 tests/e2e/t_exceptions.py`, `python3 tests/e2e/t_rbac.py` | T1–T8 and the Process View role checks |
 | End to end (UI) | `node tests/e2e/ui.cjs` | The happy path and the Process View visibility through the React UI with Playwright |
 
@@ -392,7 +385,7 @@ Scenario matrix (all automated, run against Camunda 8.9.28):
 
 | # | Scenario | Expected result |
 |---|---|---|
-| T1 | 2 subjects, one increased | Two examiners per subject, HOD recommends, CoE approves, official result updated, Completed, result email |
+| T1 | 2 subjects, one increased | Two examiners per subject working in parallel, CoE approves, official result updated, Completed, result email |
 | T2 | Session `DEC-2025` | *Eligible?* No: window closed |
 | T2b | Exam cell rejects the application | *Eligible?* No; the student sees the clerk's remarks |
 | T3 | Student doesn't pay | Payment timer fires → *Notify Payment Failure* → Closed: not paid |
@@ -401,7 +394,7 @@ Scenario matrix (all automated, run against Camunda 8.9.28):
 | T6 | Clerk picks the first evaluator or the same examiner twice; CoE rejects an increase | Field error; increase `WITHHELD`, original marks stand, no *Update official result* |
 | T7 | No mark increases | *Marks increased?* No → straight to publication (no *Update official result*) |
 | T8 | Second request in the same session | 409 before the process starts |
-| RBAC | Student, examiner, CoE, HOD, anonymous call Process View URLs | 403 / 401; exam cell gets 200 |
+| RBAC | Student, examiner, CoE, anonymous call Process View URLs | 403 / 401; exam cell gets 200 |
 
 ## 11. Troubleshooting
 
@@ -411,7 +404,7 @@ Scenario matrix (all automated, run against Camunda 8.9.28):
 | Payment page keeps saying "Preparing your payment order…" | The REST connector could not create the order. Open the instance in Operate (or the Process View): check the incident on *Create Razorpay test order* (keys, base URL). |
 | Backend fails with "Failed to retrieve well known configuration" | `CAMUNDA_AUTH_METHOD` must be `none` for local Camunda and `oidc` for SaaS. |
 | Tasks don't appear for a few seconds | Camunda's search index lags the engine slightly; the inbox refreshes every 4 s. |
-| A HOD or the CoE sees no Group tasks tab | Their groups are read at sign-in: use **Switch user** and sign in again after upgrading. |
-| An examiner's task doesn't appear after the clerk assigned one subject | Each examination step waits until every subject of the request has finished the previous step. Complete the clerk's task for the other subjects too. |
+| The CoE sees no Group tasks tab | Their groups are read at sign-in: use **Switch user** and sign in again after upgrading. |
+| An examiner's task doesn't appear after the clerk assigned one subject | The examiners' tasks start once the clerk has assigned the examiners of every subject of the request. Complete the clerk's task for the other subjects too. |
 | A student gets "already have an open revaluation request" | One open request per student per session. Use another student or `docker compose down -v` to reset. |
-| Requests started before this version are stuck | They run on the old process version, whose job workers were removed. Cancel them in Operate, or reset with `docker compose down -v`. |
+| Requests started before this version are stuck | They run on the old process version (for example waiting at *HOD reviews mark increase*, whose users no longer exist, or at a task the portal has no form for). Cancel them in Operate, or reset with `docker compose down -v`. |

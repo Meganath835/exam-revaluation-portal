@@ -22,7 +22,6 @@ export const ROLE_LABEL = {
   STUDENT: 'Student',
   EXAM_CELL: 'Exam cell',
   EXAMINER: 'Examiner',
-  MODERATOR: 'Moderator',
   COE: 'Controller of Examinations',
 };
 

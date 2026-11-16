@@ -31,58 +31,53 @@ p = wait(lambda: (lambda x: x[1] if x[0] == 200 and x[1]["razorpayOrderId"] else
 print("payment order:", p["razorpayOrderId"], p["amountPaise"])
 s, b = api("POST", f"/api/payments/{rid}/mock-checkout", S, {"outcome": "success"}); assert s == 200 and b["status"] == "PAID", b
 
-def examiner_task(element, code):
+def examiner_tasks(code):
+    """The open tasks of both examiners of one subject: {examiner: task}."""
     def f():
+        found = {}
         for ex in CSE_EXAMINERS:
             for t in api("GET", "/api/tasks?view=mine", ex)[1]:
-                if t["elementId"] == element and t["requestId"] == rid and t["subjectCode"] == code: return ex, t
-    return wait(f, f"{element} {code}")
+                if t["elementId"] == "examinerSendsMarks" and t["requestId"] == rid and t["subjectCode"] == code: found[ex] = t
+        return found if len(found) == 2 else None
+    return wait(f, f"both examiner tasks for {code}")
 
-# Each examination step runs once per subject (parallel multi-instance); the next step starts when
-# every subject has finished the current one, so the test works step by step across both subjects.
-first, second = {}, {}
-
-# Clerk assigns independent examiner (suggestion and archived script come from the backend).
+# Clerk assigns independent examiners: one task per subject (parallel multi-instance), two examiners
+# per task. Suggestions and the archived script come from the backend.
+assigned = {}
 for code in MARKS:
     t = task_for("examcell.clerk", "clerkAssignExaminer", rid, view="group", subject=code)
-    first[code] = t["context"]["suggestedExaminerId"]
-    assert first[code] and first[code] != t["context"]["firstEvaluator"], t["context"]
-    complete("examcell.clerk", t, {"firstExaminerId": first[code], "scriptId": t["context"]["archivedScriptId"]})
+    c = t["context"]
+    pair = (c["suggestedExaminerId"], c["suggestedSecondExaminerId"])
+    assert all(pair) and pair[0] != pair[1] and c["firstEvaluator"] not in pair, c
+    s, b = api("POST", f"/api/tasks/{t['key']}/complete", "examcell.clerk", {"variables": {"firstExaminerId": pair[0], "secondExaminerId": pair[0], "scriptId": c["archivedScriptId"]}})
+    assert s == 400 and "two different examiners" in b["fieldErrors"]["secondExaminerId"], (s, b)
+    complete("examcell.clerk", t, {"firstExaminerId": pair[0], "secondExaminerId": pair[1], "scriptId": c["archivedScriptId"]})
+    assigned[code] = pair
 
-# Examiner sends updated marks to clerk (blind).
-for code, (m1, _) in MARKS.items():
-    ex, t = examiner_task("examinerSendsMarks", code)
-    assert ex == first[code]
-    hidden = {"studentId", "studentName", "subjects"} & set(t["context"]) or {"originalMarks"} & set(t["context"]["subject"])
-    assert not hidden, f"blind evaluation leaked {hidden}"
-    complete(ex, t, {"firstExaminerMarks": m1, "firstExaminerRemarks": "Rechecked all answers"})
+# Examiner sends updated marks to clerk: one task per subject and examiner (parallel multi-instance),
+# so both examiners of a subject have their task at the same time. Blind; the second examiner
+# answers first here to show that the order doesn't matter.
+for code, marks in MARKS.items():
+    tasks = examiner_tasks(code)
+    assert set(tasks) == set(assigned[code]), (tasks.keys(), assigned[code])
+    for ex, m in reversed(list(zip(assigned[code], marks))):
+        t = tasks[ex]
+        hidden = {"studentId", "studentName", "subjects", "subjectResults"} & set(t["context"]) \
+            or {"originalMarks", "firstExaminerId", "secondExaminerId"} & set(t["context"]["subject"])
+        assert not hidden, f"blind evaluation leaked {hidden}"
+        assert t["context"]["subject"]["examinerId"] == ex, t["context"]
+        complete(ex, t, {"examinerMarks": m, "examinerRemarks": "Rechecked all answers"})
+    print(code, "examiners:", assigned[code][0], "->", marks[0], "|", assigned[code][1], "->", marks[1])
 
-# Clerk assigns second independent examiner, seeing the first examiner's marks.
-for code, (m1, _) in MARKS.items():
-    t = task_for("examcell.clerk", "clerkAssignSecondExaminer", rid, view="group", subject=code)
-    assert t["context"]["subject"]["firstExaminerMarks"] == m1
-    second[code] = t["context"]["suggestedExaminerId"]
-    assert second[code] not in (first[code], t["context"]["firstEvaluator"]), t["context"]
-    complete("examcell.clerk", t, {"secondExaminerId": second[code]})
-
-# Re-evaluate answer script (blind, first examiner's marks hidden too).
-for code, (m1, m2) in MARKS.items():
-    ex2, t = examiner_task("reEvaluateScript", code)
-    assert ex2 == second[code] and "firstExaminerMarks" not in t["context"]["subject"], t["context"]
-    complete(ex2, t, {"secondExaminerMarks": m2, "examinerRemarks": "Second evaluation done"})
-    print(code, "examiners:", first[code], "->", m1, "|", second[code], "->", m2)
-
-# Marks increased? Yes (CS301) -> HOD reviews -> CoE approves -> Increase approved? Yes.
-t = task_for("hod.cse", "hodReviewIncrease", rid, view="group")
-assert [r["subjectCode"] for r in t["context"]["subjectResults"] if r["marksIncreased"]] == ["CS301"]
-assert api("GET", f"/api/tasks/{t['key']}", "hod.ece")[0] == 404, "another department's HOD must not see it"
-s, b = api("POST", f"/api/tasks/{t['key']}/complete", "hod.cse", {"variables": {"decisions": []}})
-assert s == 400 and "decisions" in b["fieldErrors"], (s, b)
-complete("hod.cse", t, {"decisions": [{"subjectCode": "CS301", "approve": True, "remarks": "Totalling error confirmed"}]})
+# Marks increased? Yes (CS301) -> straight to the CoE -> Increase approved? Yes.
 t = task_for("coe", "coeApproveResult", rid, view="group")
-assert t["context"]["hodReview"][0]["recommendation"] == "APPROVE", t["context"]
-complete("coe", t, {"decisions": [{"subjectCode": "CS301", "approve": True, "remarks": ""}]})
-print("HOD and CoE approved the CS301 increase")
+increased = [r for r in t["context"]["subjectResults"] if r["marksIncreased"]]
+assert [r["subjectCode"] for r in increased] == ["CS301"], t["context"]
+assert (increased[0]["firstExaminerMarks"], increased[0]["secondExaminerMarks"], increased[0]["revisedMarks"]) == (46, 50, 48), increased
+s, b = api("POST", f"/api/tasks/{t['key']}/complete", "coe", {"variables": {"decisions": []}})
+assert s == 400 and "decisions" in b["fieldErrors"], (s, b)
+complete("coe", t, {"decisions": [{"subjectCode": "CS301", "approve": True, "remarks": "Totalling error confirmed"}]})
+print("CoE approved the CS301 increase")
 
 t = task_for("examcell.clerk", "updateOfficialResult", rid, view="group")
 print("update result:", [(x["subjectCode"], x["originalMarks"], x["revisedMarks"], x["outcome"]) for x in t["context"]["subjectResults"]])
@@ -99,7 +94,8 @@ for e in reversed(st["events"]): print("  -", e["message"])
 # The exam cell's Process View shows the same instance with all of its tasks.
 s, d = api("GET", f"/api/process-view/requests/{rid}", "examcell.clerk"); assert s == 200, d
 names = [x["name"] for x in d["tasks"]]
-assert len(d["tasks"]) == 1 + 1 + 1 + 4 * 2 + 2 + 1, names   # submit, verify, checkout, 4 examination tasks x 2 subjects, HOD, CoE, update result
+assert len(d["tasks"]) == 1 + 1 + 1 + 2 + 2 * 2 + 1 + 1, names   # submit, verify, checkout, assign x 2 subjects, examiner x 2 subjects x 2 examiners, CoE, update result
+assert not any("hod" in x["elementId"].lower() for x in d["tasks"]), names
 assert all(x["state"] == "COMPLETED" for x in d["tasks"]), d["tasks"]
 assert not any("refund" in x["elementId"].lower() for x in d["elements"])
 print("process view tasks:", len(d["tasks"]), "| elements:", len(d["elements"]))

@@ -96,7 +96,7 @@ const marksRules = (max) => ({ ...req('Enter the marks.'), min: { value: 0, mess
 const invalid = (error) => (error ? 'border-destructive focus-visible:ring-destructive' : '');
 
 /** Examiner options for a subject: same department, never the first evaluator (or anyone in `exclude`). */
-function ExaminerSelect({ task, name, exclude = [], register, error, label }) {
+function ExaminerSelect({ task, name, exclude = [], suggested, rules, register, error, label }) {
   const c = task.context;
   const s = c.subject || {};
   const examiners = useQuery({ queryKey: ['examiners', s.department], queryFn: () => api(`/examiners?department=${s.department || ''}`) });
@@ -105,14 +105,14 @@ function ExaminerSelect({ task, name, exclude = [], register, error, label }) {
   if (examiners.isLoading) return <p className="text-sm text-muted-foreground">Loading examiners…</p>;
   return (
     <Field label={label} htmlFor={name} error={error}>
-      <select id={name} className={cn('input max-w-sm', error && 'input-error')} {...register(name, req('Choose an examiner.'))}>
+      <select id={name} className={cn('input max-w-sm', error && 'input-error')} {...register(name, { ...req('Choose an examiner.'), ...rules })}>
         <option value="">Choose…</option>
         {options.map((e) => <option key={e.username} value={e.username}>{e.displayName} ({e.username})</option>)}
       </select>
-      {c.suggestedExaminerId && !error && (
+      {suggested && !error && (
         <span className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
           <Sparkles className="h-3.5 w-3.5 text-gold-dark" aria-hidden="true" />
-          Suggested: <span className="font-mono">{c.suggestedExaminerId}</span> (fewest open revaluations)
+          Suggested: <span className="font-mono">{suggested}</span> (fewest open revaluations)
         </span>
       )}
     </Field>
@@ -192,95 +192,58 @@ export function VerifyApplicationForm({ task, onDone }) {
   );
 }
 
-/** Exam cell: choose the first independent examiner and confirm the answer script. */
+/** Exam cell: choose the two independent examiners of a subject and confirm the answer script. */
 export function AssignExaminerForm({ task, onDone }) {
   const c = task.context;
   const s = c.subject || {};
   const { register, handleSubmit, setError, formState: { errors } } = useForm({
-    defaultValues: { firstExaminerId: c.suggestedExaminerId || '', scriptId: c.archivedScriptId || '' },
+    defaultValues: {
+      firstExaminerId: c.suggestedExaminerId || '', secondExaminerId: c.suggestedSecondExaminerId || '', scriptId: c.archivedScriptId || '',
+    },
   });
-  const save = useCompleteTask(task, setError, onDone, 'Examiner assigned');
+  const save = useCompleteTask(task, setError, onDone, 'Examiners assigned');
   return (
     <form className="flex flex-col gap-5" noValidate onSubmit={handleSubmit((v) => save.mutate(v))}>
       <Info title={`${s.subjectCode} · ${s.subjectName} (${s.department})`}>
         <span>Student {c.studentName} <span className="font-mono">{c.studentId}</span></span>
         {c.firstEvaluator && <span className="text-foreground/80">First evaluation by <span className="font-mono">{c.firstEvaluator}</span>, who can't revalue it.</span>}
+        <span className="text-foreground/80">Both examiners get the script at the same time and evaluate it independently.</span>
       </Info>
       <div className="flex flex-wrap gap-3">
         <MarksTile label="Original marks" value={s.originalMarks} max={s.maxMarks} />
       </div>
-      <ExaminerSelect task={task} name="firstExaminerId" label="Independent examiner" register={register} error={errors.firstExaminerId?.message} />
+      <ExaminerSelect task={task} name="firstExaminerId" label="First independent examiner" suggested={c.suggestedExaminerId}
+        register={register} error={errors.firstExaminerId?.message} />
+      <ExaminerSelect task={task} name="secondExaminerId" label="Second independent examiner" suggested={c.suggestedSecondExaminerId}
+        rules={{ validate: (v, all) => (v ? v !== all.firstExaminerId || 'Choose two different examiners.' : 'Choose an examiner.') }}
+        register={register} error={errors.secondExaminerId?.message} />
       <Field label="Answer script ID" htmlFor="scriptId"
         help={c.archivedScriptId ? 'From the scanned script archive' : 'No scan in the archive: retrieve the physical script and enter its ID'}
         error={errors.scriptId?.message}>
         <Input id="scriptId" className={cn('max-w-xs font-mono', invalid(errors.scriptId))} {...register('scriptId', req('Enter the answer script ID.'))} />
       </Field>
-      <Submit pending={save.isPending} icon={UserPlus}>Assign examiner</Submit>
+      <Submit pending={save.isPending} icon={UserPlus}>Assign examiners</Submit>
     </form>
   );
 }
 
-/** First examiner: blind re-evaluation. The server strips the student's identity and the original marks. */
+/** Either examiner: blind re-evaluation. The server strips the student's identity, the original marks and the other examiner. */
 export function ExaminerMarksForm({ task, onDone }) {
   const s = task.context.subject || {};
-  const { register, handleSubmit, setError, formState: { errors } } = useForm({ defaultValues: { firstExaminerMarks: '', firstExaminerRemarks: '' } });
+  const { register, handleSubmit, setError, formState: { errors } } = useForm({ defaultValues: { examinerMarks: '', examinerRemarks: '' } });
   const save = useCompleteTask(task, setError, onDone, 'Marks sent to the exam cell');
   return (
-    <form className="flex flex-col gap-5" noValidate onSubmit={handleSubmit((v) => save.mutate({ firstExaminerMarks: Number(v.firstExaminerMarks), firstExaminerRemarks: v.firstExaminerRemarks }))}>
-      <Info icon={EyeOff} title="Blind evaluation">
-        <span className="text-foreground/80">Script <span className="font-mono">{s.scriptId}</span> · {s.subjectCode} {s.subjectName}. The student's name and original marks are hidden from you.</span>
-      </Info>
-      <Field label="Updated marks" htmlFor="firstExaminerMarks" help={`Out of ${s.maxMarks}`} error={errors.firstExaminerMarks?.message}>
-        <Input id="firstExaminerMarks" type="number" inputMode="numeric" className={cn('h-11 w-32 font-mono text-base', invalid(errors.firstExaminerMarks))} {...register('firstExaminerMarks', marksRules(s.maxMarks))} />
-      </Field>
-      <Field label="Remarks for the exam cell" htmlFor="firstExaminerRemarks" error={errors.firstExaminerRemarks?.message}>
-        <Textarea id="firstExaminerRemarks" rows={4} className={invalid(errors.firstExaminerRemarks)} {...register('firstExaminerRemarks', req('Add remarks for the exam cell.'))} />
-      </Field>
-      <Submit pending={save.isPending}>Send marks to the exam cell</Submit>
-    </form>
-  );
-}
-
-/** Exam cell: see the first examiner's marks and choose a second independent examiner. */
-export function AssignSecondExaminerForm({ task, onDone }) {
-  const c = task.context;
-  const s = c.subject || {};
-  const { register, handleSubmit, setError, formState: { errors } } = useForm({ defaultValues: { secondExaminerId: c.suggestedExaminerId || '' } });
-  const save = useCompleteTask(task, setError, onDone, 'Second examiner assigned');
-  return (
-    <form className="flex flex-col gap-5" noValidate onSubmit={handleSubmit((v) => save.mutate(v))}>
-      <Info title={`${s.subjectCode} · ${s.subjectName}`}>
-        <span className="text-foreground/80">First examiner: <span className="font-mono">{s.firstExaminerId}</span></span>
-        {s.firstExaminerRemarks && <span className="text-foreground/80">“{s.firstExaminerRemarks}”</span>}
-      </Info>
-      <div className="flex flex-wrap items-center gap-3">
-        <MarksTile label="Original" value={s.originalMarks} max={s.maxMarks} />
-        <ArrowRight className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-        <MarksTile label="First examiner" value={s.firstExaminerMarks} max={s.maxMarks} />
-      </div>
-      <ExaminerSelect task={task} name="secondExaminerId" label="Second independent examiner" exclude={[s.firstExaminerId]} register={register} error={errors.secondExaminerId?.message} />
-      <Submit pending={save.isPending} icon={UserPlus}>Assign second examiner</Submit>
-    </form>
-  );
-}
-
-/** Second examiner: blind re-evaluation; the first examiner's marks are hidden too. */
-export function ReEvaluateForm({ task, onDone }) {
-  const s = task.context.subject || {};
-  const { register, handleSubmit, setError, formState: { errors } } = useForm({ defaultValues: { secondExaminerMarks: '', examinerRemarks: '' } });
-  const save = useCompleteTask(task, setError, onDone, 'Evaluation submitted');
-  return (
-    <form className="flex flex-col gap-5" noValidate onSubmit={handleSubmit((v) => save.mutate({ secondExaminerMarks: Number(v.secondExaminerMarks), examinerRemarks: v.examinerRemarks }))}>
+    <form className="flex flex-col gap-5" noValidate onSubmit={handleSubmit((v) => save.mutate({ examinerMarks: Number(v.examinerMarks), examinerRemarks: v.examinerRemarks }))}>
       <Info icon={EyeOff} title="Blind evaluation">
         <span className="text-foreground/80">Script <span className="font-mono">{s.scriptId}</span> · {s.subjectCode} {s.subjectName}. The student's name, the original marks and the other examiner's marks are hidden from you.</span>
       </Info>
-      <Field label="Your marks" htmlFor="secondExaminerMarks" help={`Out of ${s.maxMarks}`} error={errors.secondExaminerMarks?.message}>
-        <Input id="secondExaminerMarks" type="number" inputMode="numeric" className={cn('h-11 w-32 font-mono text-base', invalid(errors.secondExaminerMarks))} {...register('secondExaminerMarks', marksRules(s.maxMarks))} />
+      <Field label="Updated marks" htmlFor="examinerMarks" help={`Out of ${s.maxMarks}`} error={errors.examinerMarks?.message}>
+        <Input id="examinerMarks" type="number" inputMode="numeric" className={cn('h-11 w-32 font-mono text-base', invalid(errors.examinerMarks))} {...register('examinerMarks', marksRules(s.maxMarks))} />
       </Field>
       <Field label="Remarks for the exam cell" htmlFor="examinerRemarks" error={errors.examinerRemarks?.message}>
         <Textarea id="examinerRemarks" rows={4} className={invalid(errors.examinerRemarks)} {...register('examinerRemarks', req('Add remarks for the exam cell.'))} />
       </Field>
-      <Submit pending={save.isPending}>Submit evaluation</Submit>
+      <Submit pending={save.isPending}>Send marks to the exam cell</Submit>
     </form>
   );
 }
@@ -297,7 +260,7 @@ export function UpdateResultForm({ task, onDone }) {
   const save = useCompleteTask(task, setError, onDone, 'Official result updated');
   return (
     <form className="flex flex-col gap-5" noValidate onSubmit={handleSubmit((v) => save.mutate({ resultUpdated: v.resultUpdated, resultReference: v.resultReference }))}>
-      <Info icon={ShieldCheck} title="Approved by the HOD and the Controller of Examinations">
+      <Info icon={ShieldCheck} title="Approved by the Controller of Examinations">
         <span className="text-foreground/80">Final marks are the average of both independent examiners, rounded half up.</span>
       </Info>
       <div className="overflow-hidden rounded-lg border">
@@ -349,30 +312,24 @@ export function PayFeeTask({ task }) {
   );
 }
 
-/**
- * HOD (recommendation) and Controller of Examinations (final decision): approve or reject the increase
- * for every subject whose marks went up. The CoE also sees the HOD's recommendation.
- */
+/** Controller of Examinations: approve or reject the increase for every subject whose marks went up. The decision is final. */
 export function ReviewIncreaseForm({ task, onDone }) {
   const c = task.context;
-  const isCoe = task.elementId === 'coeApproveResult';
   const increased = (c.subjectResults || []).filter((r) => r.marksIncreased);
-  const hod = Object.fromEntries((c.hodReview || []).map((h) => [h.subjectCode, h]));
   const { register, handleSubmit, watch, setError, formState: { errors } } = useForm({
     defaultValues: Object.fromEntries(increased.flatMap((r) => [[`d_${r.subjectCode}`, ''], [`r_${r.subjectCode}`, '']])),
   });
-  const save = useCompleteTask(task, setError, onDone, isCoe ? 'Final decision recorded' : 'Recommendation sent to the CoE');
+  const save = useCompleteTask(task, setError, onDone, 'Final decision recorded');
   const submit = (v) => save.mutate({
     decisions: increased.map((r) => ({ subjectCode: r.subjectCode, approve: v[`d_${r.subjectCode}`] === 'approve', remarks: v[`r_${r.subjectCode}`] })),
   });
   return (
     <form className="flex flex-col gap-5" noValidate onSubmit={handleSubmit(submit)}>
       <Info icon={ShieldCheck} title={<>{c.studentName} <span className="font-mono font-normal">{c.studentId}</span> · {c.department} · {c.examSession}</>}>
-        <span className="text-foreground/80">{isCoe ? 'Your decision is final. A rejected increase is withheld and the original marks stand.' : 'Your recommendation goes to the Controller of Examinations for the final decision.'}</span>
+        <span className="text-foreground/80">Your decision is final. A rejected increase is withheld and the original marks stand.</span>
       </Info>
       {increased.map((r) => {
         const err = errors[`d_${r.subjectCode}`] || errors[`r_${r.subjectCode}`];
-        const rec = hod[r.subjectCode];
         return (
           <fieldset key={r.subjectCode} className="m-0 flex flex-col gap-4 rounded-lg border bg-card p-4">
             <legend className="px-1.5 text-sm font-semibold">{r.subjectCode} · {r.subjectName}</legend>
@@ -384,12 +341,6 @@ export function ReviewIncreaseForm({ task, onDone }) {
               <MarksTile label="Revised" value={r.revisedMarks} max={r.maxMarks} tone="up" />
               <Badge className="border-transparent bg-ok text-ok-foreground hover:bg-ok">+{r.markDifference}</Badge>
             </div>
-            {isCoe && rec && (
-              <div className={cn('flex items-start gap-2 rounded-md px-3 py-2 text-[13px]', rec.recommendation === 'APPROVE' ? 'bg-ok-soft text-ok' : 'bg-pen-soft text-pen')}>
-                {rec.recommendation === 'APPROVE' ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" /> : <XCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />}
-                <span>HOD recommends: <b>{rec.recommendation === 'APPROVE' ? 'approve' : 'reject'}</b>{rec.remarks ? ` · “${rec.remarks}”` : ''}</span>
-              </div>
-            )}
             <Choice name={`d_${r.subjectCode}`} value={watch(`d_${r.subjectCode}`)} register={register} rules={req('Approve or reject this increase.')}
               options={[['approve', 'Approve the increase', 'ok'], ['reject', 'Reject the increase', 'pen']]} />
             <Field label="Remarks" htmlFor={`r_${r.subjectCode}`} help="Required when you reject">
@@ -401,7 +352,7 @@ export function ReviewIncreaseForm({ task, onDone }) {
         );
       })}
       {errors.decisions && <span className="err">{errors.decisions.message}</span>}
-      <Submit pending={save.isPending} icon={ShieldCheck}>{isCoe ? 'Record final decision' : 'Send recommendation'}</Submit>
+      <Submit pending={save.isPending} icon={ShieldCheck}>Record final decision</Submit>
     </form>
   );
 }

@@ -261,6 +261,6 @@ function OutcomeChip({ sub }) {
   if (sub.outcome === 'REVISED') return chip('bg-ok-soft text-ok', 'Marks increased');
   if (sub.outcome === 'WITHHELD') return chip('bg-pen-soft text-pen', 'Increase not approved');
   if (sub.outcome === 'UNCHANGED') return chip('bg-muted text-foreground/80', 'Unchanged');
-  if (/examiner/i.test(sub.stage || '')) return chip('bg-warn-soft text-warn', 'With examiner');
+  if (/examiner|one of two evaluations/i.test(sub.stage || '')) return chip('bg-warn-soft text-warn', 'With examiners');
   return chip('bg-muted text-muted-foreground', 'In progress');
 }

@@ -15,7 +15,7 @@ const CHECKOUT_JS = 'https://checkout.razorpay.com/v1/checkout.js';
 
 const AFTER_PAYMENT = [
   [ScanSearch, 'The exam cell assigns two independent examiners to each script.'],
-  [ShieldCheck, 'Your HOD and the Controller of Examinations approve any increase.'],
+  [ShieldCheck, 'The Controller of Examinations approves any increase.'],
   [Mail, 'You get an email when the result is published, and the request page updates live.'],
 ];
 
